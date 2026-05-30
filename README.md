@@ -8,11 +8,14 @@ Drop in a CSV export, get a virtualised, risk-classified timeline you can pivot 
 
 ## Quick start
 
-1. Download [`ual-timeline.html`](ual-timeline.html).
-2. Open it in any modern browser (Chrome, Edge, Firefox, Safari).
-3. Drag a UAL CSV onto the drop zone, or click to browse. Multiple files merge and dedupe automatically.
+Two ways to run it — both run entirely in your browser; **your audit data is never uploaded either way.**
 
-That's it. No install, no build step, no network calls.
+- **Hosted:** open **https://paulharken.github.io/ual-viewer/** — nothing to install.
+- **Local / offline:** download [`ual-timeline.html`](ual-timeline.html) and open the single file in any modern browser. This is the one to use on an **isolated or air-gapped analysis box** — it needs no network at all.
+
+Then drag a UAL CSV onto the drop zone, or click to browse. Multiple files merge and dedupe automatically.
+
+> The hosted version is a convenience mirror: loading the *page* is a request to GitHub, but the CSVs you load are parsed locally and stay in the tab. For the most sensitive work, prefer the downloaded local file so even opening the tool leaves no trace.
 
 ## What it accepts
 

@@ -149,6 +149,7 @@
 
   /* detail */
   .detail{width:400px;flex:none;display:flex;flex-direction:column;background:var(--panel);overflow:hidden}
+  .body.detail-collapsed .detail{display:none}
   .detail .dhead{padding:10px 14px;border-bottom:1px solid var(--line);flex:none}
   .detail .dhead .op{font-size:14px;font-weight:600}
   .detail .dhead .dt{font-family:var(--mono);font-size:11px;color:var(--txt2);margin-top:3px}
@@ -159,7 +160,12 @@
   .kv .v a{color:var(--accent);cursor:pointer;text-decoration:none}
   .kv .v a:hover{text-decoration:underline}
   .draw{flex:1;overflow:auto;padding:10px 14px}
-  .draw h4{margin:0 0 6px;font-size:10px;text-transform:uppercase;letter-spacing:.6px;color:var(--txt3)}
+  .draw h4{margin:0 0 6px;font-size:10px;text-transform:uppercase;letter-spacing:.6px;color:var(--txt3);
+    display:flex;align-items:center;gap:6px;cursor:pointer;user-select:none}
+  .draw h4:hover{color:var(--txt2)}
+  .draw h4 .caret{transition:transform .12s;font-size:9px}
+  .draw.collapsed h4 .caret{transform:rotate(-90deg)}
+  .draw.collapsed pre.json{display:none}
   pre.json{margin:0;font-family:var(--mono);font-size:11px;white-space:pre-wrap;word-break:break-word;color:var(--txt2)}
   pre.json .jk{color:#7fb0ff}.json .js{color:#86d293}.json .jn{color:#e0a830}.json .jb{color:#ff8c7a}
 
@@ -185,6 +191,7 @@
     <div class="stat"><b id="st-users">0</b><span>users</span></div>
     <div class="stat"><b id="st-ips">0</b><span>IPs</span></div>
     <div class="stat"><b id="st-range">—</b><span>span</span></div>
+    <button class="btn sm" id="btn-detail" title="Hide the inspector panel to give the timeline full width">hide detail</button>
     <button class="btn sm" id="btn-add">+ add CSV</button>
     <button class="btn sm" id="btn-export">export view</button>
     <button class="btn sm" id="btn-reset">reset</button>
@@ -552,6 +559,8 @@ let FILES=0;
 const F={ q:'', tz:'utc', from:null, to:null, highonly:false, sort:'asc',
           risks:new Set(), wls:new Set(), tab:'user', user:'', obj:null, ipsel:'', ipwin:1440 };
 let IPSWITCH=null;     // Map(eventRef -> {prevUser, gap}) for the selected IP
+let RAWCOLLAPSED=false; // collapse state of the Raw AuditData JSON section
+try{ RAWCOLLAPSED = localStorage.getItem('ual-viewer-raw-collapsed')==='1'; }catch(e){}
 let selectedIdx=-1;   // index into FILTERED
 let rowItems=[];      // {type:'day'|'ev', ...} virtual list
 let ROWOF=[];         // ROWOF[fidx] = index of that event's row within rowItems (for scroll-into-view)
@@ -836,7 +845,11 @@ function renderDetail(){
       '<div class="k">User agent</div><div class="v">'+esc(e.ua||'—')+'</div>'+
     '</div>'+
     (e.oauth ? renderOAuthSection(e.oauth) : '')+
-    '<div class="draw"><h4>Raw AuditData</h4><pre class="json">'+hl(e.raw)+'</pre></div>';
+    '<div class="draw'+(RAWCOLLAPSED?' collapsed':'')+'"><h4 id="rawtoggle"><span class="caret">▾</span>Raw AuditData</h4><pre class="json">'+hl(e.raw)+'</pre></div>';
+  const rawtog=d.querySelector('#rawtoggle');
+  if(rawtog) rawtog.onclick=()=>{ const dr=rawtog.closest('.draw');
+    RAWCOLLAPSED=!dr.classList.contains('collapsed'); dr.classList.toggle('collapsed',RAWCOLLAPSED);
+    try{ localStorage.setItem('ual-viewer-raw-collapsed',RAWCOLLAPSED?'1':'0'); }catch(e){} };
   d.querySelectorAll('a[data-act]').forEach(a=>{
     a.onclick=()=>{ const act=a.dataset.act, val=a.dataset.val;
       const pivotEv=selectedIdx>=0?FILTERED[selectedIdx]:null;
@@ -1051,6 +1064,19 @@ document.getElementById('objclear').onclick=()=>{F.obj=null;document.getElementB
   renderObjList();renderObjSummary();applyFilters();};
 document.getElementById('btn-add').onclick=()=>fileInput.click();
 document.getElementById('btn-export').onclick=exportCSV;
+/* ---------- collapsible detail panel ---------- */
+function setDetailCollapsed(collapsed){
+  document.querySelector('.body').classList.toggle('detail-collapsed',collapsed);
+  const btn=document.getElementById('btn-detail');
+  btn.textContent = collapsed ? 'show detail' : 'hide detail';
+  btn.title = collapsed ? 'Show the record inspector panel' : 'Hide the inspector panel to give the timeline full width';
+  try{ localStorage.setItem('ual-viewer-detail-collapsed',collapsed?'1':'0'); }catch(e){}
+  if(!collapsed) renderDetail();
+}
+document.getElementById('btn-detail').onclick=()=>{
+  setDetailCollapsed(!document.querySelector('.body').classList.contains('detail-collapsed'));
+};
+try{ if(localStorage.getItem('ual-viewer-detail-collapsed')==='1') setDetailCollapsed(true); }catch(e){}
 /* ---------- resizable columns ---------- */
 (function(){
   const COLS=['time','op','user','wl','ip'];

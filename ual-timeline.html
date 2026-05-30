@@ -385,6 +385,24 @@ const WL_COLOR={
 };
 function wlColor(w){return WL_COLOR[w]||'#5b6678';}
 
+/* ---------- well-known M365 app IDs ---------- */
+const APP_NAMES={
+  '00000002-0000-0000-c000-000000000000':'Azure AD Graph',
+  '00000003-0000-0000-c000-000000000000':'Microsoft Graph',
+  '00000002-0000-0ff1-ce00-000000000000':'Office 365 Exchange',
+  '00000003-0000-0ff1-ce00-000000000000':'Office 365 SharePoint',
+  '00000005-0000-0ff1-ce00-000000000000':'Office 365 Yammer',
+  '27922004-5251-4030-b22d-91ecd9a37ea4':'Outlook Desktop',
+  '38aa3b87-a06d-4817-b275-7a316988d93b':'Microsoft Office',
+  '90a2e5d2-fd7a-4a2e-bc90-3dc50ae8e3ee':'Microsoft Edge',
+  '5f09333a-842c-47da-a157-57da27fcbca5':'Intune Portal',
+  'ab9b8c07-8f02-4f72-87fa-80105867a763':'OneDrive SyncEngine',
+  '1fec8e78-bce4-4aaf-ab1b-5451cc387264':'Microsoft Teams',
+  'd3590ed6-52b3-4102-aeff-aad2292ab01c':'Microsoft Office',
+  '4765445b-32c6-49b0-83e6-1d93765276ca':'Office Online',
+};
+function appName(id){ return id&&APP_NAMES[id.toLowerCase()]||''; }
+
 /* ---------- normalise a row into an event ---------- */
 function normalise(row){
   let ad=null;
@@ -400,21 +418,104 @@ function normalise(row){
   const ts = parseTs(tsVal) || parseTs(ci(row,'CreationDate'));
   const op = get('Operation','Operations') || ci(row,'Operations') || '';
   const wl = get('Workload') || '';
+  const rt = get('RecordType') || ci(row,'RecordType') || '';
+  const rtNum = parseInt(rt,10)||0;
+
+  /* --- per-RecordType IP extraction (validated against real Invictus extractions) ---
+     RT 15      (AAD / Entra STS Logon) : ClientIP, ActorIpAddress, both present and identical
+     RT 2       (Exchange)              : ClientIP = ClientIPAddress, both present
+     RT 3,50    (ExchangeAggregated)    : ClientIPAddress ONLY (no ClientIP)
+     RT 4,6,14  (OneDrive/SharePoint)   : ClientIP
+     RT 25      (Teams)                 : ClientIP (often ::ffff: wrapped)
+     RT 22      (Yammer)                : ClientIP
+     RT 63,83,84(DLP/MIP)              : ClientIP
+     RT 13      (DLP policy)            : none
+     RT 43      (MIPLabel)              : none
+  */
+  let ip;
+  if(rtNum===3||rtNum===50){
+    // ExchangeItemAggregated — only has ClientIPAddress, no ClientIP
+    ip = get('ClientIPAddress') || get('ClientIP','ActorIpAddress');
+  } else if(rtNum===15){
+    // AAD / Entra — prefer ClientIP, fall back to ActorIpAddress
+    ip = get('ClientIP','ActorIpAddress');
+  } else {
+    // All other RTs: ClientIP is canonical
+    ip = get('ClientIP','ClientIPAddress','ActorIpAddress','ClientIp') || fromExtended(ad,'ClientIP') || '';
+  }
+
+  /* --- per-RecordType User-Agent extraction ---
+     RT 15      : ExtendedProperties "UserAgent" (NOT a top-level field)
+     RT 2,3,50  : ClientInfoString (e.g. "Client=OutlookService;Outlook-iOS/2.0;")
+     RT 4,6,14  : UserAgent (top-level)
+     RT 25      : none
+     Others     : fallback chain
+  */
+  let ua;
+  if(rtNum===15){
+    ua = fromExtended(ad,'UserAgent') || get('UserAgent','ClientInfoString') || '';
+  } else if(rtNum===2||rtNum===3||rtNum===50){
+    ua = get('ClientInfoString','UserAgent') || '';
+  } else {
+    ua = get('UserAgent','ClientInfoString') || fromExtended(ad,'UserAgent') || '';
+  }
+
   const user = get('UserId','UserIds','MailboxOwnerUPN','UserKey') || ci(row,'UserIds') || '';
-  const ip = get('ClientIP','ClientIPAddress','ActorIpAddress','ClientIp') || fromExtended(ad,'ClientIP') || '';
   const obj = get('ObjectId','SourceRelativeUrl','ObjectID') || '';
   const result = get('ResultStatus','Result') || '';
-  const ua = get('UserAgent','ClientInfoString') || fromExtended(ad,'UserAgent') || '';
-  const rt = get('RecordType') || ci(row,'RecordType') || '';
   const file = get('SourceFileName') || '';
   const site = get('SiteUrl','Site') || '';
   const cls = classify(op);
+
+  /* --- OAuth / token context ---
+     RT 15: ExtendedProperties.RequestType (e.g. "OAuth2:Token", "Login:login")
+            ApplicationId = requesting app, Target[0].ID = resource app
+            DeviceProperties array has OS, BrowserType, SessionId, device info
+     RT 2,3,4,6,14,25,50: AppAccessContext object with
+            ClientAppId/ClientAppName, UniqueTokenId, TokenIssuedAtTime, AADSessionId
+     RT 2,50: TokenType, AuthType (top-level)
+  */
+  let oauth = null;
+  if(ad){
+    const reqType = fromExtended(ad,'RequestType') || '';
+    const aac = ad.AppAccessContext || null;
+    const appId = ad.ApplicationId || (aac&&aac.ClientAppId) || ad.AppId || ad.ClientAppId || '';
+    const tokenType = ad.TokenType || '';
+    const authType = ad.AuthType || '';
+    const tokenId = (aac&&(aac.UniqueTokenId||'')) || '';
+    const tokenIssued = (aac&&(aac.TokenIssuedAtTime||aac.IssuedAtTime||'')) || '';
+    const aadSession = (aac&&aac.AADSessionId) || '';
+    const clientAppName = (aac&&aac.ClientAppName) || appName(appId);
+    // Target resource (RT 15)
+    let targetResource = '';
+    if(Array.isArray(ad.Target)&&ad.Target.length){
+      const t0 = ad.Target[0];
+      if(t0&&t0.ID) targetResource = appName(t0.ID) || t0.ID;
+    }
+    // Device info (RT 15 DeviceProperties array)
+    let deviceOS='', deviceBrowser='', deviceName='', deviceCompliant='';
+    if(Array.isArray(ad.DeviceProperties)){
+      for(const dp of ad.DeviceProperties){
+        if(dp.Name==='OS') deviceOS=dp.Value;
+        else if(dp.Name==='BrowserType') deviceBrowser=dp.Value;
+        else if(dp.Name==='DisplayName') deviceName=dp.Value;
+        else if(dp.Name==='IsCompliant') deviceCompliant=dp.Value;
+      }
+    }
+    // Only surface OAuth section if we have meaningful token data
+    if(reqType||tokenType||authType||tokenId||appId){
+      oauth = { reqType, appId, clientAppName, tokenType, authType,
+                tokenId, tokenIssued, aadSession, targetResource,
+                deviceOS, deviceBrowser, deviceName, deviceCompliant };
+    }
+  }
 
   return {
     ts, tsRaw:tsVal, op, wl, user:String(user), ip:String(ip).replace(/^::ffff:/,''),
     obj:String(obj), result:String(result), ua:String(ua), rt:String(rt),
     file:String(file), site:String(site), cat:cls.cat, risk:cls.risk,
     id: get('Id','Identity') || '',
+    oauth,
     raw: ad || row,
     search:'' // filled later
   };
@@ -649,6 +750,7 @@ function renderDetail(){
       (e.site?'<div class="k">Site</div><div class="v">'+esc(e.site)+'</div>':'')+
       '<div class="k">User agent</div><div class="v">'+esc(e.ua||'—')+'</div>'+
     '</div>'+
+    (e.oauth ? renderOAuthSection(e.oauth) : '')+
     '<div class="draw"><h4>Raw AuditData</h4><pre class="json">'+hl(e.raw)+'</pre></div>';
   d.querySelectorAll('a[data-act]').forEach(a=>{
     a.onclick=()=>{ const act=a.dataset.act, val=a.dataset.val;
@@ -660,6 +762,27 @@ function renderDetail(){
       if(pivotEv){ const ni=FILTERED.indexOf(pivotEv); if(ni>=0){ selectedIdx=ni; paintWindow(); renderDetail(); } }
     };
   });
+}
+
+/* ---------- OAuth / token detail section ---------- */
+function renderOAuthSection(o){
+  if(!o) return '';
+  let rows = '';
+  const kv=(k,v)=>{ if(v) rows+='<div class="k">'+k+'</div><div class="v">'+esc(v)+'</div>'; };
+  kv('Request type', o.reqType);
+  kv('App / client', o.clientAppName ? o.clientAppName+(o.appId?' ('+o.appId+')':'') : o.appId);
+  kv('Target resource', o.targetResource);
+  kv('Token type', [o.tokenType,o.authType].filter(Boolean).join(' / '));
+  kv('Token ID', o.tokenId);
+  kv('Token issued', o.tokenIssued);
+  kv('AAD session', o.aadSession);
+  if(o.deviceOS||o.deviceBrowser||o.deviceName){
+    const parts = [o.deviceOS,o.deviceBrowser,o.deviceName].filter(Boolean).join(' · ');
+    kv('Device', parts + (o.deviceCompliant==='True'?' ✓ compliant':''));
+  }
+  if(!rows) return '';
+  return '<div style="padding:6px 14px 2px;flex:none"><span style="font-size:10px;text-transform:uppercase;letter-spacing:.6px;color:var(--txt3)">OAuth / Token</span></div>'+
+    '<div class="kv" style="border-color:var(--accent2)">' + rows + '</div>';
 }
 
 /* ---------- file/object pivot ---------- */

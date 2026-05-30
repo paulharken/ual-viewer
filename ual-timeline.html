@@ -168,8 +168,13 @@
   pre.json{margin:0;font-family:var(--mono);font-size:11px;white-space:pre-wrap;word-break:break-word;color:var(--txt2)}
   pre.json .jk{color:#7fb0ff}.json .js{color:#86d293}.json .jn{color:#e0a830}.json .jb{color:#ff8c7a}
   /* workload-specific detail section (Teams) */
-  .tsec-h{padding:6px 14px 2px;flex:none}
-  .tsec-h span{font-size:10px;text-transform:uppercase;letter-spacing:.6px;color:var(--txt3)}
+  /* collapsible detail sub-sections (OAuth, Teams) */
+  .dsec-h{margin:0;padding:6px 14px 2px;flex:none;font-size:10px;text-transform:uppercase;letter-spacing:.6px;
+    color:var(--txt3);display:flex;align-items:center;gap:6px;cursor:pointer;user-select:none}
+  .dsec-h:hover{color:var(--txt2)}
+  .dsec-h .caret{transition:transform .12s;font-size:9px}
+  .dsec.collapsed .dsec-h .caret{transform:rotate(-90deg)}
+  .dsec.collapsed .kv{display:none}
   .kv.tsec{border-color:#5b6dd6}
   .tchip{display:inline-block;font-size:10px;font-family:var(--mono);padding:0 6px;border-radius:4px;
     background:var(--panel2);border:1px solid var(--line2);color:var(--txt2);vertical-align:middle}
@@ -576,6 +581,8 @@ let FILES=0;
 const F={ q:'', tz:'utc', from:null, to:null, highonly:false, sort:'asc',
           risks:new Set(), wls:new Set(), tab:'user', user:'', obj:null, ipsel:'', ipwin:1440 };
 let IPSWITCH=null;     // Map(eventRef -> {prevUser, gap}) for the selected IP
+const SECCOLLAPSE={};  // collapsed state of detail sub-sections (oauth, teams)
+try{ ['oauth','teams'].forEach(k=>{ if(localStorage.getItem('ual-viewer-sec-'+k)==='1') SECCOLLAPSE[k]=true; }); }catch(e){}
 let selectedIdx=-1;   // index into FILTERED
 let rowItems=[];      // {type:'day'|'ev', ...} virtual list
 let ROWOF=[];         // ROWOF[fidx] = index of that event's row within rowItems (for scroll-into-view)
@@ -879,6 +886,13 @@ function renderDetail(){
       if(pivotEv){ const ni=FILTERED.indexOf(pivotEv); if(ni>=0){ selectedIdx=ni; paintWindow(); renderDetail(); } }
     };
   });
+  // click a sub-section header (OAuth / Teams) to collapse it; remembered per section
+  d.querySelectorAll('.dsec-h').forEach(h=>{
+    h.onclick=()=>{ const sec=h.closest('.dsec'), key=sec.dataset.sec;
+      const collapsed=!sec.classList.contains('collapsed');
+      sec.classList.toggle('collapsed',collapsed); SECCOLLAPSE[key]=collapsed;
+      try{ localStorage.setItem('ual-viewer-sec-'+key, collapsed?'1':'0'); }catch(e){} };
+  });
 }
 
 /* ---------- OAuth / token detail section ---------- */
@@ -898,8 +912,9 @@ function renderOAuthSection(o){
     kv('Device', parts + (o.deviceCompliant==='True'?' ✓ compliant':''));
   }
   if(!rows) return '';
-  return '<div style="padding:6px 14px 2px;flex:none"><span style="font-size:10px;text-transform:uppercase;letter-spacing:.6px;color:var(--txt3)">OAuth / Token</span></div>'+
-    '<div class="kv" style="border-color:var(--accent2)">' + rows + '</div>';
+  return '<div class="dsec'+(SECCOLLAPSE.oauth?' collapsed':'')+'" data-sec="oauth">'+
+    '<h4 class="dsec-h"><span class="caret">▾</span>OAuth / Token</h4>'+
+    '<div class="kv" style="border-color:var(--accent2)">' + rows + '</div></div>';
 }
 
 /* ---------- MicrosoftTeams workload detail ---------- */
@@ -992,7 +1007,9 @@ function renderTeamsSection(e){
 
   if(extCount) lead='<div class="k">Flag</div><div class="v"><span class="tchip warn">⚠ '+extCount+' external participant'+(extCount===1?'':'s')+'</span></div>';
   if(!rows && !lead) return '';
-  return '<div class="tsec-h"><span>Teams context</span></div><div class="kv tsec">'+lead+rows+'</div>';
+  return '<div class="dsec'+(SECCOLLAPSE.teams?' collapsed':'')+'" data-sec="teams">'+
+    '<h4 class="dsec-h"><span class="caret">▾</span>Teams context</h4>'+
+    '<div class="kv tsec">'+lead+rows+'</div></div>';
 }
 
 /* ---------- file/object pivot ---------- */

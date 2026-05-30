@@ -14,6 +14,7 @@
     --mono:"SF Mono","JetBrains Mono","Cascadia Code","Consolas","Liberation Mono",monospace;
     --sans:"Segoe UI Variable","Segoe UI",-apple-system,system-ui,"Helvetica Neue",sans-serif;
     --rowh:34px;
+    --col-time:170px; --col-op:210px; --col-user:200px; --col-wl:120px; --col-ip:130px;
   }
   *{box-sizing:border-box}
   html,body{height:100%}
@@ -110,8 +111,11 @@
   .timeline-wrap{flex:1;display:flex;flex-direction:column;min-width:0;border-right:1px solid var(--line)}
   .tl-head{display:flex;align-items:center;padding:6px 14px;font-size:10px;color:var(--txt3);
     text-transform:uppercase;letter-spacing:.6px;background:var(--bg2);border-bottom:1px solid var(--line);flex:none}
-  .tl-head .c-time{width:170px}.tl-head .c-op{width:210px}.tl-head .c-user{width:200px}
-  .tl-head .c-wl{width:120px}.tl-head .c-ip{width:130px}.tl-head .c-obj{flex:1}
+  .tl-head span{position:relative}
+  .tl-head .c-time{width:var(--col-time)}.tl-head .c-op{width:var(--col-op)}.tl-head .c-user{width:var(--col-user)}
+  .tl-head .c-wl{width:var(--col-wl)}.tl-head .c-ip{width:var(--col-ip)}.tl-head .c-obj{flex:1}
+  .rh{position:absolute;right:-3px;top:-4px;bottom:-4px;width:6px;cursor:col-resize;z-index:2}
+  .rh:hover{background:var(--accent);opacity:.5}
   #scroller{flex:1;overflow-y:auto;position:relative}
   #spacer{position:relative;width:100%}
   .ev{position:absolute;left:0;right:0;height:var(--rowh);display:flex;align-items:center;
@@ -120,16 +124,17 @@
   .ev.sel{background:#16263d}
   .ev.risk-high{box-shadow:inset 3px 0 0 var(--high)}
   .ev.risk-med{box-shadow:inset 3px 0 0 var(--med)}
-  .ev .c-time{width:170px;font-family:var(--mono);font-size:11px;color:var(--txt2)}
-  .ev .c-op{width:210px;overflow:hidden;text-overflow:ellipsis}
-  .ev .c-user{width:200px;overflow:hidden;text-overflow:ellipsis;color:var(--txt2)}
-  .ev .c-wl{width:120px}
-  .ev .c-ip{width:130px;font-family:var(--mono);font-size:11px;color:var(--txt2)}
+  .ev .c-time{width:var(--col-time);font-family:var(--mono);font-size:11px;color:var(--txt2)}
+  .ev .c-op{width:var(--col-op);overflow:hidden;text-overflow:ellipsis}
+  .ev .c-user{width:var(--col-user);overflow:hidden;text-overflow:ellipsis;color:var(--txt2)}
+  .ev .c-wl{width:var(--col-wl);overflow:hidden}
+  .ev .c-ip{width:var(--col-ip);font-family:var(--mono);font-size:11px;color:var(--txt2)}
   .ev .c-obj{flex:1;overflow:hidden;text-overflow:ellipsis;color:var(--txt3);font-family:var(--mono);font-size:11px}
   .opbadge{display:inline-flex;align-items:center;gap:6px}
   .opbadge .dot{width:8px;height:8px;border-radius:50%;flex:none}
   .wlbadge{font-size:10px;padding:1px 7px;border-radius:4px;font-family:var(--mono);
-    background:var(--panel2);border:1px solid var(--line2);color:var(--txt2)}
+    background:var(--panel2);border:1px solid var(--line2);color:var(--txt2);
+    max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:inline-block;vertical-align:middle;box-sizing:border-box}
   .dayrow{position:absolute;left:0;right:0;height:var(--rowh);display:flex;align-items:center;
     padding:0 14px;background:#0a0e14;border-bottom:1px solid var(--line2);
     font-family:var(--mono);font-size:11px;color:var(--accent);letter-spacing:.5px}
@@ -245,8 +250,12 @@
   <div class="body">
     <div class="timeline-wrap">
       <div class="tl-head">
-        <span class="c-time">time</span><span class="c-op">operation</span><span class="c-user">user</span>
-        <span class="c-wl">workload</span><span class="c-ip">client ip</span><span class="c-obj">object</span>
+        <span class="c-time">time<span class="rh" data-col="time" title="Drag to resize · double-click to reset"></span></span>
+        <span class="c-op">operation<span class="rh" data-col="op" title="Drag to resize · double-click to reset"></span></span>
+        <span class="c-user">user<span class="rh" data-col="user" title="Drag to resize · double-click to reset"></span></span>
+        <span class="c-wl">workload<span class="rh" data-col="wl" title="Drag to resize · double-click to reset"></span></span>
+        <span class="c-ip">client ip<span class="rh" data-col="ip" title="Drag to resize · double-click to reset"></span></span>
+        <span class="c-obj">object</span>
       </div>
       <div id="scroller"><div id="spacer"></div></div>
     </div>
@@ -775,6 +784,43 @@ document.getElementById('objclear').onclick=()=>{F.obj=null;document.getElementB
   renderObjList();renderObjSummary();applyFilters();};
 document.getElementById('btn-add').onclick=()=>fileInput.click();
 document.getElementById('btn-export').onclick=exportCSV;
+/* ---------- resizable columns ---------- */
+(function(){
+  const COLS=['time','op','user','wl','ip'];
+  const DEF={time:'170px',op:'210px',user:'200px',wl:'120px',ip:'130px'};
+  const KEY='ual-viewer-cols-v1';
+  try{ const saved=JSON.parse(localStorage.getItem(KEY)||'null');
+    if(saved){ for(const c of COLS) if(saved[c]) document.documentElement.style.setProperty('--col-'+c, saved[c]); }
+  }catch(e){}
+  let drag=null,sx=0,sw=0;
+  function persist(){ const w={};
+    for(const c of COLS) w[c]=getComputedStyle(document.documentElement).getPropertyValue('--col-'+c).trim();
+    try{ localStorage.setItem(KEY, JSON.stringify(w)); }catch(e){}
+  }
+  document.querySelectorAll('.rh').forEach(h=>{
+    h.addEventListener('mousedown',e=>{
+      drag=h.dataset.col; sx=e.clientX;
+      sw=parseInt(getComputedStyle(document.documentElement).getPropertyValue('--col-'+drag),10);
+      document.body.style.cursor='col-resize'; document.body.style.userSelect='none';
+      e.preventDefault(); e.stopPropagation();
+    });
+    h.addEventListener('dblclick',e=>{
+      document.documentElement.style.setProperty('--col-'+h.dataset.col, DEF[h.dataset.col]);
+      persist(); e.preventDefault(); e.stopPropagation();
+    });
+  });
+  document.addEventListener('mousemove',e=>{
+    if(!drag) return;
+    const w=Math.max(60, sw+(e.clientX-sx));
+    document.documentElement.style.setProperty('--col-'+drag, w+'px');
+  });
+  document.addEventListener('mouseup',()=>{
+    if(!drag) return;
+    persist();
+    document.body.style.cursor=''; document.body.style.userSelect=''; drag=null;
+  });
+})();
+
 document.getElementById('btn-reset').onclick=()=>{
   EVENTS=[];FILTERED=[];FILES=0;OBJINDEX=null;F.user='';F.obj=null;F.q='';F.risks.clear();F.wls.clear();
   F.from=F.to=null;F.highonly=false;

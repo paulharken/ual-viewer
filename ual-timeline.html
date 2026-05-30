@@ -292,6 +292,7 @@
   <div class="footer">
     <span id="f-files">0 files</span>
     <span id="f-mode"></span>
+    <span title="↑/↓ or j/k to move · PgUp/PgDn · Home/End">↑↓ navigate</span>
     <span style="margin-left:auto">all processing is client-side · times stored as UTC</span>
   </div>
 </div>
@@ -553,6 +554,7 @@ const F={ q:'', tz:'utc', from:null, to:null, highonly:false, sort:'asc',
 let IPSWITCH=null;     // Map(eventRef -> {prevUser, gap}) for the selected IP
 let selectedIdx=-1;   // index into FILTERED
 let rowItems=[];      // {type:'day'|'ev', ...} virtual list
+let ROWOF=[];         // ROWOF[fidx] = index of that event's row within rowItems (for scroll-into-view)
 
 /* ---------- ingest ---------- */
 function ingestText(text){
@@ -683,11 +685,12 @@ function applyFilters(){
    : (F.obj?('object: '+shortObj(F.obj)):'no object selected');
 }
 function buildRowItems(){
-  rowItems=[]; let lastDay='';
+  rowItems=[]; ROWOF=[]; let lastDay='';
   for(let i=0;i<FILTERED.length;i++){
     const e=FILTERED[i];
     const day=fmtDay(e.ts);
     if(day!==lastDay){ rowItems.push({type:'day',label:day}); lastDay=day; }
+    ROWOF[i]=rowItems.length;
     rowItems.push({type:'ev',ev:e,fidx:i});
   }
 }
@@ -778,6 +781,39 @@ window.addEventListener('resize',()=>{ if(rowItems.length) paintWindow(); });
 spacer.addEventListener('click',e=>{
   const row=e.target.closest('.ev'); if(!row)return;
   selectedIdx=parseInt(row.dataset.fidx,10); paintWindow(); renderDetail();
+});
+// keep the selected row inside the scroll viewport (list is virtualised)
+function scrollSelectedIntoView(){
+  if(selectedIdx<0 || ROWOF[selectedIdx]==null) return;
+  const y=ROWOF[selectedIdx]*ROWH, top=scroller.scrollTop, h=scroller.clientHeight;
+  if(y<top) scroller.scrollTop=y;
+  else if(y+ROWH>top+h) scroller.scrollTop=y+ROWH-h;
+}
+function selectRow(idx){
+  if(!FILTERED.length) return;
+  selectedIdx=Math.max(0,Math.min(idx,FILTERED.length-1));
+  scrollSelectedIntoView(); paintWindow(); renderDetail();
+}
+// keyboard navigation through the timeline
+document.addEventListener('keydown',e=>{
+  if(document.getElementById('app').style.display==='none') return;        // not loaded
+  if(e.ctrlKey||e.metaKey||e.altKey) return;                               // leave shortcuts alone
+  const t=e.target, tag=t&&t.tagName;
+  if(tag==='INPUT'||tag==='SELECT'||tag==='TEXTAREA') return;              // typing in a field
+  if(!FILTERED.length) return;
+  const cur=selectedIdx<0?0:selectedIdx;
+  const page=Math.max(1,Math.floor(scroller.clientHeight/ROWH)-1);
+  let handled=true;
+  switch(e.key){
+    case 'ArrowDown': case 'j': selectRow(selectedIdx<0?0:cur+1); break;
+    case 'ArrowUp':   case 'k': selectRow(selectedIdx<0?0:cur-1); break;
+    case 'PageDown': selectRow(cur+page); break;
+    case 'PageUp':   selectRow(cur-page); break;
+    case 'Home': selectRow(0); break;
+    case 'End':  selectRow(FILTERED.length-1); break;
+    default: handled=false;
+  }
+  if(handled) e.preventDefault();
 });
 
 /* ---------- detail panel ---------- */

@@ -24,11 +24,13 @@ The parser handles the three CSV shapes you'll see in the wild:
 
 Embedded commas, doubled quotes, and newlines inside the JSON blob are handled correctly. Rows without a usable timestamp are skipped and reported in the load status, so you'll know if anything didn't make it in.
 
-## Two workflows it's built for
+## Workflows it's built for
 
 **1. User activity walkthrough.** Pull a `userID` with the Invictus Extractor Suite, drop the CSV, pick the user from the dropdown on the **User activity** tab. The timeline scopes to everything that account did, in order, with risk-classified events.
 
 **2. File / object focus.** Pull a SharePoint or OneDrive object with the Invictus Extractor Suite, drop the CSV, switch to the **File / object focus** tab, and search by filename or path fragment. Select a matching `ObjectId` to see a summary card (first seen, last seen, distinct users, distinct IPs, top operations) plus the scoped timeline.
+
+**3. IP / session focus.** Switch to the **IP / session focus** tab and pick a source IP. The timeline scopes to everything that IP did *across all users* — the cross-account view that matters in BEC/ATO cases. IPs used by more than one account are sorted to the top and flagged (`⚠ N users`), and a configurable shared-session window marks rapid account switches from the same IP (`↔`) — the "one Tor exit, three mailboxes in ten minutes" pattern, surfaced at a glance.
 
 ## DFIR-relevant features
 
@@ -48,11 +50,14 @@ This makes it safe to run on isolated analysis VMs and on data subject to handli
 
 ## Roadmap
 
-Tracked as GitHub issues:
+Tracked as GitHub issues.
 
-- [#1 RecordType-aware field mapping](https://github.com/paulharken/ual-viewer/issues/1) — tighter IP / UA extraction for AAD/EntraID sign-in records
+**Shipped:**
+- ✅ [#1 RecordType-aware field mapping](https://github.com/paulharken/ual-viewer/issues/1) — per-RecordType IP / UA extraction for AAD/EntraID sign-in records, plus OAuth / token detail
+- ✅ [#3 IP / session correlation view](https://github.com/paulharken/ual-viewer/issues/3) — cross-user pivot by source IP, multi-user-IP flagging, session-switch markers
+
+**Open:**
 - [#2 Web Worker async parsing](https://github.com/paulharken/ual-viewer/issues/2) — keep the UI responsive on multi-hundred-MB exports
-- [#3 IP / session correlation view](https://github.com/paulharken/ual-viewer/issues/3) — cross-user pivot by source IP, impossible-travel markers
 - [#4 Configurable risk classification](https://github.com/paulharken/ual-viewer/issues/4) — analyst-editable rules, persisted locally
 - [#5 Bookmarks and annotations](https://github.com/paulharken/ual-viewer/issues/5) — mark key events and export an annotated set for reporting
 - [#6 Node / spider-web graph view](https://github.com/paulharken/ual-viewer/issues/6) — force-directed graph with a focal user/object/IP surrounded by everything connected to it

@@ -105,6 +105,11 @@
   .summary{display:flex;gap:18px;flex-wrap:wrap;margin-top:10px;font-size:12px}
   .summary .s b{font-family:var(--mono);color:var(--txt);display:block;font-size:13px}
   .summary .s span{color:var(--txt3);font-size:10px;text-transform:uppercase;letter-spacing:.5px}
+  .summary .s.alert b{color:#cbb2ff}
+  .ipwarn{display:flex;align-items:center;gap:8px;width:100%;margin:2px 0 4px;padding:6px 10px;border-radius:6px;
+    background:rgba(176,124,255,.12);border:1px solid #8b5cf6;color:#cbb2ff;font-size:12px}
+  .ipwarn b{font-family:var(--mono)}
+  .swmark{color:#b07cff;font-weight:700;font-family:var(--mono);margin-right:3px;cursor:help}
 
   /* body split */
   .body{flex:1;display:flex;overflow:hidden;min-height:0}
@@ -227,6 +232,7 @@
   <div class="tabs">
     <button data-tab="user" class="on">User activity</button>
     <button data-tab="file">File / object focus</button>
+    <button data-tab="ip">IP / session focus</button>
   </div>
 
   <!-- user pivot -->
@@ -247,6 +253,23 @@
     </div>
     <div class="objlist" id="objlist"></div>
     <div class="summary" id="objsummary"></div>
+  </div>
+
+  <!-- ip pivot -->
+  <div class="pivot" id="pivot-ip">
+    <div class="row">
+      <span class="lbl">client ip</span>
+      <select id="ipselect"><option value="">— all IPs —</option></select>
+      <span class="lbl" title="Flag when this IP is used by a different user within the window — possible shared/compromised session">shared-session window</span>
+      <select id="ipwindow">
+        <option value="0">off</option>
+        <option value="60">60 min</option>
+        <option value="240">4 h</option>
+        <option value="1440" selected>24 h</option>
+      </select>
+      <span class="pill" id="ippill"></span>
+    </div>
+    <div class="summary" id="ipsummary"></div>
   </div>
 
   <div class="body">
@@ -526,7 +549,8 @@ let EVENTS=[];        // all normalised
 let FILTERED=[];      // current view
 let FILES=0;
 const F={ q:'', tz:'utc', from:null, to:null, highonly:false, sort:'asc',
-          risks:new Set(), wls:new Set(), tab:'user', user:'', obj:null };
+          risks:new Set(), wls:new Set(), tab:'user', user:'', obj:null, ipsel:'', ipwin:1440 };
+let IPSWITCH=null;     // Map(eventRef -> {prevUser, gap}) for the selected IP
 let selectedIdx=-1;   // index into FILTERED
 let rowItems=[];      // {type:'day'|'ev', ...} virtual list
 
@@ -555,6 +579,7 @@ function afterLoad(){
   EVENTS.sort((a,b)=>a.ts-b.ts);
   buildChips();
   buildUserSelect();
+  buildIpSelect();
   document.getElementById('loader').style.display='none';
   document.getElementById('app').style.display='flex';
   document.getElementById('statbar').style.display='flex';
@@ -610,6 +635,25 @@ function buildUserSelect(){
   sel.innerHTML='<option value="">— all users ('+users.length+') —</option>'+
     users.map(u=>'<option value="'+u.replace(/"/g,'&quot;')+'">'+u+'  ('+counts[u]+')</option>').join('');
 }
+// distinct users per IP, computed once per load — also drives the multi-user flag
+let IPUSERS=null;
+function ipUserCount(ip){ return (IPUSERS&&IPUSERS[ip]) ? IPUSERS[ip].size : 0; }
+function buildIpSelect(){
+  const counts={}; IPUSERS={};
+  EVENTS.forEach(e=>{ if(!e.ip) return; counts[e.ip]=(counts[e.ip]||0)+1;
+    (IPUSERS[e.ip]||(IPUSERS[e.ip]=new Set())).add(e.user||'(none)'); });
+  const sel=document.getElementById('ipselect');
+  // sort multi-user IPs first, then by event count
+  const ips=Object.keys(counts).sort((a,b)=>{
+    const ma=IPUSERS[a].size>1?1:0, mb=IPUSERS[b].size>1?1:0;
+    if(ma!==mb) return mb-ma;
+    return counts[b]-counts[a];
+  });
+  const shared=ips.filter(ip=>IPUSERS[ip].size>1).length;
+  sel.innerHTML='<option value="">— all IPs ('+ips.length+(shared?', '+shared+' shared':'')+') —</option>'+
+    ips.map(ip=>{ const uc=IPUSERS[ip].size; const warn=uc>1?'  ⚠ '+uc+' users':'';
+      return '<option value="'+esc(ip)+'">'+esc(ip)+'  ('+counts[ip]+')'+warn+'</option>'; }).join('');
+}
 
 /* ---------- filtering ---------- */
 function applyFilters(){
@@ -623,6 +667,7 @@ function applyFilters(){
     if(F.to && e.ts > F.to) return false;
     if(F.tab==='user' && F.user && e.user!==F.user) return false;
     if(F.tab==='file' && F.obj && e.obj!==F.obj) return false;
+    if(F.tab==='ip' && F.ipsel && e.ip!==F.ipsel) return false;
     if(terms.length){ for(const t of terms){ if(!e.search.includes(t)) return false; } }
     return true;
   });
@@ -632,9 +677,10 @@ function applyFilters(){
   renderStats();
   renderTimeline();
   renderDetail();
-  document.getElementById('f-mode').textContent = F.tab==='user'
-     ? (F.user?('user: '+F.user):'all users')
-     : (F.obj?('object: '+shortObj(F.obj)):'no object selected');
+  document.getElementById('f-mode').textContent =
+     F.tab==='user' ? (F.user?('user: '+F.user):'all users')
+   : F.tab==='ip'   ? (F.ipsel?('ip: '+F.ipsel):'no IP selected')
+   : (F.obj?('object: '+shortObj(F.obj)):'no object selected');
 }
 function buildRowItems(){
   rowItems=[]; let lastDay='';
@@ -710,10 +756,13 @@ function paintWindow(){
       const e=it.ev; const col=wlColor(e.wl); const rcol=RISK_COLOR[e.risk];
       const selcls=(it.fidx===selectedIdx)?' sel':'';
       const rk=(e.risk==='high')?' risk-high':(e.risk==='med')?' risk-med':'';
+      let userCell=esc(e.user||'—');
+      if(F.tab==='ip' && IPSWITCH && IPSWITCH.has(e)){ const sw=IPSWITCH.get(e);
+        userCell='<span class="swmark" title="this IP was used by '+esc(sw.prevUser)+' '+sw.gap+' min earlier">↔</span>'+userCell; }
       html+='<div class="ev'+selcls+rk+'" style="top:'+y+'px" data-fidx="'+it.fidx+'">'+
         '<span class="c-time">'+fmtTime(e.ts)+'</span>'+
         '<span class="c-op"><span class="opbadge"><span class="dot" style="background:'+rcol+'"></span>'+esc(e.op||'(none)')+'</span></span>'+
-        '<span class="c-user">'+esc(e.user||'—')+'</span>'+
+        '<span class="c-user">'+userCell+'</span>'+
         '<span class="c-wl">'+(e.wl?'<span class="wlbadge" style="border-color:'+col+';color:'+col+'">'+esc(e.wl)+'</span>':'')+'</span>'+
         '<span class="c-ip">'+esc(e.ip||'—')+'</span>'+
         '<span class="c-obj" title="'+esc(e.obj)+'">'+esc(shortObj(e.obj))+'</span>'+
@@ -757,7 +806,7 @@ function renderDetail(){
       const pivotEv=selectedIdx>=0?FILTERED[selectedIdx]:null;
       if(act==='user'){ setTab('user'); F.user=val; document.getElementById('userselect').value=val; }
       else if(act==='obj'){ setTab('file'); selectObject(val); }
-      else if(act==='ip'){ document.getElementById('search').value=val; F.q=val; }
+      else if(act==='ip'){ setTab('ip'); selectIp(val); document.getElementById('ipselect').value=val; }
       applyFilters();
       if(pivotEv){ const ni=FILTERED.indexOf(pivotEv); if(ni>=0){ selectedIdx=ni; paintWindow(); renderDetail(); } }
     };
@@ -834,6 +883,59 @@ function renderObjSummary(){
     '<div class="s" style="flex:1"><b style="font-size:11px">'+esc(topops)+'</b><span>top operations</span></div>';
 }
 
+/* ---------- ip / session pivot ---------- */
+function selectIp(ip){
+  F.ipsel=ip;
+  computeIpSwitch();
+  renderIpSummary();
+  applyFilters();
+}
+function winLabel(m){ return m>=1440?(m/1440)+'d' : m>=60?(m/60)+'h' : m+'m'; }
+// flag events where this IP was used by a different user within the window (rapid session switch)
+function computeIpSwitch(){
+  IPSWITCH=null;
+  if(!F.ipsel || !F.ipwin) return;
+  const win=F.ipwin*60000;
+  const evs=EVENTS.filter(e=>e.ip===F.ipsel).sort((a,b)=>a.ts-b.ts);
+  const m=new Map();
+  for(let i=1;i<evs.length;i++){
+    const cur=evs[i], prev=evs[i-1];
+    const cu=cur.user||'(none)', pu=prev.user||'(none)';
+    if(cu!==pu && (cur.ts-prev.ts)<=win){
+      m.set(cur,{prevUser:pu, gap:Math.round((cur.ts-prev.ts)/60000)});
+    }
+  }
+  IPSWITCH = m.size ? m : null;
+}
+function renderIpSummary(){
+  const s=document.getElementById('ipsummary');
+  const pill=document.getElementById('ippill');
+  if(!F.ipsel){ s.innerHTML=''; pill.textContent=''; return; }
+  const evs=EVENTS.filter(e=>e.ip===F.ipsel);
+  if(!evs.length){ s.innerHTML=''; pill.textContent=''; return; }
+  const users=new Set(),objs=new Set(),ops={};
+  let mn=evs[0].ts,mx=evs[0].ts;
+  evs.forEach(e=>{ if(e.user)users.add(e.user); if(e.obj)objs.add(e.obj); ops[e.op]=(ops[e.op]||0)+1;
+    if(e.ts<mn)mn=e.ts; if(e.ts>mx)mx=e.ts; });
+  const topops=Object.keys(ops).sort((a,b)=>ops[b]-ops[a]).slice(0,4).map(o=>o+' ('+ops[o]+')').join(', ');
+  const switches=IPSWITCH?IPSWITCH.size:0;
+  pill.textContent=users.size+' user'+(users.size===1?'':'s')+' · '+evs.length+' events';
+  let warn='';
+  if(users.size>1){
+    const ulist=Array.from(users).slice(0,6).join(', ')+(users.size>6?', …':'');
+    warn='<div class="ipwarn">⚠&nbsp;<b>'+users.size+' distinct users</b> from this IP'+
+      (switches?(' · <b>'+switches+'</b> rapid session switch'+(switches===1?'':'es')+' within '+winLabel(F.ipwin)):'')+
+      ' &nbsp;<span style="color:var(--txt3)">'+esc(ulist)+'</span></div>';
+  }
+  s.innerHTML=warn+
+    '<div class="s'+(users.size>1?' alert':'')+'"><b>'+users.size+'</b><span>distinct users</span></div>'+
+    '<div class="s"><b>'+evs.length+'</b><span>events</span></div>'+
+    '<div class="s"><b>'+objs.size+'</b><span>distinct objects</span></div>'+
+    '<div class="s"><b>'+fmtFull(mn)+'</b><span>first seen</span></div>'+
+    '<div class="s"><b>'+fmtFull(mx)+'</b><span>last seen</span></div>'+
+    '<div class="s" style="flex:1"><b style="font-size:11px">'+esc(topops)+'</b><span>top operations</span></div>';
+}
+
 /* ---------- helpers ---------- */
 function esc(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
 function shortObj(o){ if(!o)return ''; o=String(o);
@@ -872,6 +974,7 @@ function setTab(t){
   document.querySelectorAll('.tabs button').forEach(b=>b.classList.toggle('on',b.dataset.tab===t));
   document.getElementById('pivot-user').classList.toggle('on',t==='user');
   document.getElementById('pivot-file').classList.toggle('on',t==='file');
+  document.getElementById('pivot-ip').classList.toggle('on',t==='ip');
   if(t==='file' && !OBJINDEX){ buildObjIndex(); renderObjList(); }
 }
 
@@ -895,7 +998,7 @@ document.getElementById('tzseg').onclick=e=>{ if(e.target.dataset.tz){
   // reparse date bounds under new tz
   const fv=document.getElementById('from').value, tv=document.getElementById('to').value;
   F.from=fv?parseLocalInput(fv):null; F.to=tv?parseLocalInput(tv):null;
-  applyFilters(); renderObjSummary();
+  applyFilters(); renderObjSummary(); renderIpSummary();
 }};
 document.getElementById('sortseg').onclick=e=>{ if(e.target.dataset.s){
   F.sort=e.target.dataset.s; document.querySelectorAll('#sortseg button').forEach(b=>b.classList.toggle('on',b===e.target));
@@ -904,6 +1007,9 @@ document.getElementById('sortseg').onclick=e=>{ if(e.target.dataset.s){
 document.querySelectorAll('.tabs button').forEach(b=>b.onclick=()=>{setTab(b.dataset.tab);applyFilters();});
 document.getElementById('userselect').onchange=e=>{F.user=e.target.value;
   document.getElementById('userpill').textContent=e.target.value?'':''; applyFilters();};
+document.getElementById('ipselect').onchange=e=>{ selectIp(e.target.value); };
+document.getElementById('ipwindow').onchange=e=>{ F.ipwin=parseInt(e.target.value,10)||0;
+  computeIpSwitch(); renderIpSummary(); if(rowItems.length) paintWindow(); };
 document.getElementById('objsearch').oninput=()=>renderObjList();
 document.getElementById('objclear').onclick=()=>{F.obj=null;document.getElementById('objclear').style.display='none';
   renderObjList();renderObjSummary();applyFilters();};
@@ -948,13 +1054,16 @@ document.getElementById('btn-export').onclick=exportCSV;
 
 document.getElementById('btn-reset').onclick=()=>{
   EVENTS=[];FILTERED=[];FILES=0;OBJINDEX=null;F.user='';F.obj=null;F.q='';F.risks.clear();F.wls.clear();
-  F.from=F.to=null;F.highonly=false;
+  F.from=F.to=null;F.highonly=false;F.ipsel='';F.ipwin=1440;IPSWITCH=null;IPUSERS=null;
   document.getElementById('app').style.display='none';
   document.getElementById('statbar').style.display='none';
   document.getElementById('loader').style.display='flex';
   document.getElementById('search').value='';document.getElementById('from').value='';
   document.getElementById('to').value='';document.getElementById('highonly').checked=false;
-  document.getElementById('objsearch').value='';setStatus('');
+  document.getElementById('objsearch').value='';
+  document.getElementById('ipselect').value='';document.getElementById('ipwindow').value='1440';
+  document.getElementById('ipsummary').innerHTML='';document.getElementById('ippill').textContent='';
+  setStatus('');
 };
 </script>
 </body>

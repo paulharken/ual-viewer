@@ -61,6 +61,7 @@ Tracked as GitHub issues.
 - [#4 Configurable risk classification](https://github.com/paulharken/ual-viewer/issues/4) — analyst-editable rules, persisted locally
 - [#5 Bookmarks and annotations](https://github.com/paulharken/ual-viewer/issues/5) — mark key events and export an annotated set for reporting
 - [#6 Node / spider-web graph view](https://github.com/paulharken/ual-viewer/issues/6) — force-directed graph with a focal user/object/IP surrounded by everything connected to it
+- [#7 Context window](https://github.com/paulharken/ual-viewer/issues/7) — ±N minutes around a selected event, across all users, for "pivot to the moment"
 
 ## Contributing
 

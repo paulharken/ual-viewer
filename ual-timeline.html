@@ -111,11 +111,11 @@
   .timeline-wrap{flex:1;display:flex;flex-direction:column;min-width:0;border-right:1px solid var(--line)}
   .tl-head{display:flex;align-items:center;padding:6px 14px;font-size:10px;color:var(--txt3);
     text-transform:uppercase;letter-spacing:.6px;background:var(--bg2);border-bottom:1px solid var(--line);flex:none}
-  .tl-head span{position:relative}
+  .tl-head > span{position:relative}
   .tl-head .c-time{width:var(--col-time)}.tl-head .c-op{width:var(--col-op)}.tl-head .c-user{width:var(--col-user)}
   .tl-head .c-wl{width:var(--col-wl)}.tl-head .c-ip{width:var(--col-ip)}.tl-head .c-obj{flex:1}
-  .rh{position:absolute;right:-3px;top:-4px;bottom:-4px;width:6px;cursor:col-resize;z-index:2}
-  .rh:hover{background:var(--accent);opacity:.5}
+  .tl-head .rh{position:absolute;right:-3px;top:-4px;bottom:-4px;width:6px;cursor:col-resize;z-index:2;background:transparent}
+  .tl-head .rh:hover{background:var(--accent);opacity:.5}
   #scroller{flex:1;overflow-y:auto;position:relative}
   #spacer{position:relative;width:100%}
   .ev{position:absolute;left:0;right:0;height:var(--rowh);display:flex;align-items:center;

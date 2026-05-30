@@ -183,9 +183,10 @@
   .tmut{font-size:10px;color:var(--txt3)}
   .tparts{display:flex;flex-direction:column;gap:3px;max-height:150px;overflow:auto}
   .tpart{display:flex;align-items:center;gap:6px;font-size:11px}
-  .tpart .tpn{font-family:var(--mono);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:210px}
+  .tpart .tpn{font-family:var(--mono);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
   .tpart.ext .tpn{color:#cbb2ff}
-  .tpart .trole{font-size:10px;color:var(--txt3)}
+  .tpart .tdom{font-family:var(--mono);font-size:10px;color:#cbb2ff;white-space:nowrap;flex:none}
+  .tpart .trole{font-size:10px;color:var(--txt3);white-space:nowrap;flex:none;margin-left:auto}
 
   .empty-results{flex:1;display:flex;align-items:center;justify-content:center;color:var(--txt3);font-size:13px}
   .pill{font-family:var(--mono);font-size:10px;color:var(--txt3)}
@@ -932,6 +933,15 @@ function asArr(x){
 const USERTYPE={0:'Regular',1:'Reserved',2:'Admin',3:'DC admin',4:'System',5:'Application',6:'Service principal',7:'Custom policy',8:'System policy'};
 function userTypeLabel(v){ const n=parseInt(v,10); return (USERTYPE[n]!==undefined)?USERTYPE[n]:String(v); }
 function teamsTimeOrRaw(v){ const d=parseTs(v); return d?esc(fmtFull(d)):esc(String(v)); }
+// pull the external domain from a guest/federated UPN
+//   guest:     eve_evilcorp.com#EXT#@contoso.onmicrosoft.com -> evilcorp.com
+//   federated: eve@evilcorp.com                              -> evilcorp.com
+function externalDomain(upn){
+  if(typeof upn!=='string'||!upn) return '';
+  const x=upn.toLowerCase().indexOf('#ext#');
+  if(x>=0){ const pre=upn.slice(0,x); const u=pre.lastIndexOf('_'); return u>=0?pre.slice(u+1):''; }
+  const at=upn.lastIndexOf('@'); return at>=0?upn.slice(at+1):'';
+}
 function renderTeamsSection(e){
   const ad=e.raw; if(!ad||typeof ad!=='object') return '';
   const g=(...n)=>{ for(const k of n){ const v=ad[k]; if(v!==undefined&&v!==null&&v!=='') return v; } return undefined; };
@@ -973,8 +983,10 @@ function renderTeamsSection(e){
       const role=(p.Role!==undefined&&p.Role!=='')?String(p.Role):'';
       const isExt=(typeof upn==='string'&&/#ext#/i.test(upn)) || (p.OrganizationId&&tenantOrg&&p.OrganizationId!==tenantOrg) || /guest|external/i.test(String(p.RecipientType||''))||/guest/i.test(role);
       if(isExt) extCount++;
+      const dom=isExt?externalDomain(upn):'';
       return '<div class="tpart'+(isExt?' ext':'')+'"><span class="tpn" title="'+esc(upn||name)+'">'+esc(name)+'</span>'+
-        (role?'<span class="trole">'+esc(role)+'</span>':'')+(isExt?'<span class="tchip warn">ext</span>':'')+'</div>';
+        (dom?'<span class="tdom">('+esc(dom)+')</span>':'')+
+        (role?'<span class="trole">'+esc(role)+'</span>':'')+'</div>';
     }).join('');
     const label=(att?'attendee':'member');
     kv(mem.length+' '+label+(mem.length===1?'':'s'), '<div class="tparts">'+lis+(mem.length>200?'<div class="tpart">… '+(mem.length-200)+' more</div>':'')+'</div>');

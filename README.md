@@ -42,7 +42,16 @@ Embedded commas, doubled quotes, and newlines inside the JSON blob are handled c
 - **Pivot from any record.** Click a user, IP, or object in the detail panel to refocus the whole view. Your current event stays selected so you can keep reading.
 - **Virtualised timeline.** Only the visible window renders, so large exports don't choke the DOM.
 - **Workload-aware.** Events are colour-tagged by workload (SharePoint, Exchange, AzureActiveDirectory, Teams, etc.) with per-workload filter chips.
-- **Workload-specific context.** The inspector decodes the `AuditData` per workload and surfaces the fields that matter, instead of leaving them in the JSON. **MicrosoftTeams** is implemented first: meeting join/leave + duration, device, attendee/member lists with roles, **external/guest participant flagging** (UPN `#EXT#`, attendee org ≠ tenant), Federated/cross-tenant and Private/Shared channel call-outs, links shared in chat, and app/add-on installs. (Teams schema grounded in [HubTou/tala](https://github.com/HubTou/tala) and the M365 Management Activity API.)
+- **Workload-specific context.** The inspector decodes the `AuditData` per workload and surfaces the fields that matter — leading with the security signals — instead of leaving them in the JSON. Covered workloads:
+  - **MicrosoftTeams** — meeting join/leave + duration, device, attendee lists with roles, **external/guest flagging** (UPN `#EXT#`/org ≠ tenant, with the external domain shown), Federated and Private/Shared channel call-outs, links shared, app installs. (Grounded in [HubTou/tala](https://github.com/HubTou/tala).)
+  - **Exchange** — delegate/admin mailbox access (LogonType + actor ≠ owner), `MailItemsAccessed` Bind/Sync + throttle "log gap" warning + accessed subjects, send-as, and inbox-rule forward/redirect/delete flags.
+  - **SharePoint / OneDrive** — file + path, **anonymous-link** and **external-share** flags (Guest / domain mismatch), permission, sensitivity label, sync device.
+  - **AzureActiveDirectory (Entra)** — directory-change `ModifiedProperties` diffs, flags for role grant / app consent (high-risk scope) / SPN credential add / MFA disable / domain-federation. Sign-ins fall through to the OAuth/Token section.
+  - **Yammer / Viva Engage** — data export, private-content-mode toggle, admin-role changes, retention flag.
+  - **Endpoint DLP** — egress activity, device, sensitive-info types, SHA256, USB make/model/**serial**, enforcement mode.
+  - **PublicEndpoint** — surfaced as likely Purview Network DLP (web/cloud/AI egress) with best-effort destination/SIT extraction.
+
+  Schemas sourced from the M365 Management Activity API / Purview audit docs + DFIR references; extraction is tolerant (only shows present fields).
 - **Two inspector panels, your choice.** The decoded **detail** panel and the pretty-printed, syntax-highlighted **raw AuditData** panel are separate and sit side by side. Toggle each independently from the top bar (`hide detail` / `hide raw`) — show one, both, or neither; hiding both gives the timeline the full window width. Drag either panel's left edge to resize it (double-click the edge to reset) when long object IDs or UPNs need more room. Timeline columns are drag-resizable too. All choices persist.
 - **Keyboard-driven.** `↑`/`↓` (or `j`/`k`) walk the timeline, `PgUp`/`PgDn` jump a viewport, `Home`/`End` go to the ends — the selected row scrolls into view and the panels update live.
 - **Export view.** Dumps the currently filtered set to a flat CSV with the key fields, ready to drop into a report or timeline doc.

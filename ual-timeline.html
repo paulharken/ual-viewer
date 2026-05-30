@@ -441,7 +441,8 @@ function classify(op){
 }
 const WL_COLOR={
   SharePoint:'#1f9e7a',OneDrive:'#2a7de1',Exchange:'#7c6ad6',AzureActiveDirectory:'#d2691e',
-  MicrosoftTeams:'#5b6dd6',SecurityComplianceCenter:'#c75fb0',Skype:'#2aa9e0'
+  MicrosoftTeams:'#5b6dd6',SecurityComplianceCenter:'#c75fb0',Skype:'#2aa9e0',
+  Yammer:'#1a9b8a',VivaEngage:'#1a9b8a',Endpoint:'#d0734f',PublicEndpoint:'#c2528a'
 };
 function wlColor(w){return WL_COLOR[w]||'#5b6678';}
 
@@ -588,8 +589,8 @@ let FILES=0;
 const F={ q:'', tz:'utc', from:null, to:null, highonly:false, sort:'asc',
           risks:new Set(), wls:new Set(), tab:'user', user:'', obj:null, ipsel:'', ipwin:1440 };
 let IPSWITCH=null;     // Map(eventRef -> {prevUser, gap}) for the selected IP
-const SECCOLLAPSE={};  // collapsed state of detail sub-sections (oauth, teams)
-try{ ['oauth','teams'].forEach(k=>{ if(localStorage.getItem('ual-viewer-sec-'+k)==='1') SECCOLLAPSE[k]=true; }); }catch(e){}
+const SECCOLLAPSE={};  // collapsed state of detail sub-sections (per-workload + oauth)
+try{ ['oauth','teams','exchange','sharepoint','aad','yammer','endpoint','publicendpoint'].forEach(k=>{ if(localStorage.getItem('ual-viewer-sec-'+k)==='1') SECCOLLAPSE[k]=true; }); }catch(e){}
 let selectedIdx=-1;   // index into FILTERED
 let rowItems=[];      // {type:'day'|'ev', ...} virtual list
 let ROWOF=[];         // ROWOF[fidx] = index of that event's row within rowItems (for scroll-into-view)
@@ -880,7 +881,7 @@ function renderDetail(){
       (e.site?'<div class="k">Site</div><div class="v">'+esc(e.site)+'</div>':'')+
       '<div class="k">User agent</div><div class="v">'+esc(e.ua||'—')+'</div>'+
     '</div>'+
-    (isTeamsEvent(e) ? renderTeamsSection(e) : '')+
+    renderWorkloadSection(e)+
     (e.oauth ? renderOAuthSection(e.oauth) : '');
   renderRaw();
   d.querySelectorAll('a[data-act]').forEach(a=>{
@@ -1028,6 +1029,234 @@ function renderTeamsSection(e){
   return '<div class="dsec'+(SECCOLLAPSE.teams?' collapsed':'')+'" data-sec="teams">'+
     '<h4 class="dsec-h"><span class="caret">▾</span>Teams context</h4>'+
     '<div class="kv tsec">'+lead+rows+'</div></div>';
+}
+
+/* ---------- per-workload detail sections (issue #8) ---------- */
+// tolerant getter over an AuditData object: adGet(ad,'A','B',...) -> first non-empty
+function adGet(ad){ for(let i=1;i<arguments.length;i++){ const v=ad&&ad[arguments[i]]; if(v!==undefined&&v!==null&&v!=='') return v; } return undefined; }
+function wchip(t,cls){ return '<span class="tchip'+(cls?' '+cls:'')+'">'+esc(String(t))+'</span>'; }
+function flagRow(html){ return '<div class="k">Flag</div><div class="v">'+html+'</div>'; }
+// collapsible section wrapper, colour-matched to the workload
+function dsec(key,title,rows,lead,color){
+  if(!rows && !lead) return '';
+  return '<div class="dsec'+(SECCOLLAPSE[key]?' collapsed':'')+'" data-sec="'+key+'">'+
+    '<h4 class="dsec-h"><span class="caret">▾</span>'+esc(title)+'</h4>'+
+    '<div class="kv"'+(color?' style="border-color:'+color+'"':'')+'>'+(lead||'')+(rows||'')+'</div></div>';
+}
+// decode an AAD ModifiedProperties value (often a JSON-stringified array / quoted scalar)
+function decodeMP(v){
+  if(v===undefined||v===null||v==='') return '';
+  const s=String(v);
+  try{ const p=JSON.parse(s);
+    if(Array.isArray(p)) return p.map(x=>(x&&typeof x==='object')?JSON.stringify(x):String(x)).join(', ');
+    if(p&&typeof p==='object') return JSON.stringify(p);
+    return String(p);
+  }catch(e){ return s; }
+}
+function mpFind(mp,name){ for(const p of (mp||[])){ if(p&&p.Name===name){ const n=p.NewValue; return (n!==undefined&&n!==''&&n!=='[]')?n:(p.OldValue!==undefined?p.OldValue:n); } } return undefined; }
+function emailDomain(s){ s=String(s||''); if(/#ext#/i.test(s)) return externalDomain(s); const at=s.lastIndexOf('@'); return at>=0?s.slice(at+1).toLowerCase():''; }
+function fmtBytes(n){ n=parseInt(n,10); if(!n||isNaN(n))return''; if(n<1024)return n+' B'; if(n<1048576)return (n/1024).toFixed(1)+' KB'; if(n<1073741824)return (n/1048576).toFixed(1)+' MB'; return (n/1073741824).toFixed(1)+' GB'; }
+
+// dispatch a selected event to its workload section
+function renderWorkloadSection(e){
+  if(isTeamsEvent(e)) return renderTeamsSection(e);
+  const wl=e.wl||'', rt=parseInt(e.rt,10)||0;
+  if(wl==='Exchange' || rt===1||rt===2||rt===3||rt===19||rt===50) return renderExchangeSection(e);
+  if(wl==='SharePoint'||wl==='OneDrive' || rt===4||rt===6||rt===7||rt===14||rt===36||rt===54) return renderSharePointSection(e);
+  if(wl==='AzureActiveDirectory' || rt===8||rt===9) return renderAADSection(e);
+  if(wl==='Yammer'||wl==='VivaEngage' || rt===22||rt===374||rt===414||rt===422) return renderYammerSection(e);
+  if(wl==='Endpoint' || rt===63) return renderEndpointSection(e);
+  if(wl==='PublicEndpoint') return renderPublicEndpointSection(e);
+  return '';
+}
+
+/* Exchange — mailbox (RT 1 admin, 2/3 item, 50 MailItemsAccessed) */
+function renderExchangeSection(e){
+  const ad=e.raw; if(!ad||typeof ad!=='object') return '';
+  const g=function(){ return adGet.apply(null,[ad].concat([].slice.call(arguments))); };
+  let rows='',lead='';
+  const kv=(k,h)=>{ if(h!==undefined&&h!==null&&h!=='') rows+='<div class="k">'+esc(k)+'</div><div class="v">'+h+'</div>'; };
+  const LT={0:'Owner',1:'Admin',2:'Delegated',3:'Transport',4:'System service',5:'Best access',6:'Delegated admin'};
+  const owner=g('MailboxOwnerUPN'), actor=e.user||g('UserId');
+  const ltN=parseInt(g('LogonType'),10), lt=(!isNaN(ltN))?(LT[ltN]||String(ltN)):'';
+  const ext=String(g('ExternalAccess')).toLowerCase()==='true';
+  const otherMbx=owner&&actor&&String(owner).toLowerCase()!==String(actor).toLowerCase();
+  const flags=[];
+  if(otherMbx&&(ltN===2||ltN===6||ltN===1)) flags.push(wchip('⚠ '+(lt||'non-owner')+' access to another mailbox','warn'));
+  else if(otherMbx) flags.push(wchip('⚠ actor ≠ mailbox owner','warn'));
+  if(ext) flags.push(wchip('external access','warn'));
+  // MailItemsAccessed properties
+  const ops=asArr(g('OperationProperties'))||[]; let mailAccess='',throttled=false;
+  ops.forEach(p=>{ if(p&&p.Name==='MailAccessType')mailAccess=p.Value; if(p&&p.Name==='IsThrottled'&&String(p.Value).toLowerCase()==='true')throttled=true; });
+  if(throttled) flags.push(wchip('⚠ throttled — log gap','warn'));
+  // forwarding/redirect rule in admin Parameters
+  const params=asArr(g('Parameters'))||[];
+  const fwd=params.filter(p=>p&&/forward|redirect|deletemessage/i.test(p.Name)&&p.Value&&String(p.Value).toLowerCase()!=='false');
+  if(fwd.length) flags.push(wchip('⚠ rule: forward/redirect/delete','warn'));
+  if(flags.length) lead=flagRow(flags.join(' '));
+
+  if(owner) kv('Mailbox', esc(owner)+(otherMbx?' <span class="tmut">owner ≠ actor</span>':''));
+  if(lt) kv('Logon type', wchip(lt,(ltN===2||ltN===6)?'warn':''));
+  const cis=g('ClientInfoString'); if(cis) kv('Client', esc(cis));
+  if((e.op||'')==='MailItemsAccessed'||mailAccess){
+    if(mailAccess) kv('Access', wchip(mailAccess)+(mailAccess==='Sync'?' <span class="tnote">whole folder synced</span>':''));
+    const cnt=g('OperationCount'); if(cnt) kv('Op count', esc(String(cnt)));
+    const folders=asArr(g('Folders'))||[]; const subs=[];
+    folders.forEach(f=>{ (asArr(f&&f.FolderItems)||[]).forEach(it=>{ if(it) subs.push(it.Subject||it.InternetMessageId||'(item)'); }); });
+    if(subs.length) kv(subs.length+' message'+(subs.length===1?'':'s'), '<div class="tparts">'+subs.slice(0,50).map(s=>'<div class="tpart"><span class="tpn" title="'+esc(s)+'">'+esc(s)+'</span></div>').join('')+(subs.length>50?'<div class="tpart">… '+(subs.length-50)+' more</div>':'')+'</div>');
+  }
+  const item=g('Item'); if(item&&typeof item==='object'&&item.Subject) kv('Subject', esc(item.Subject));
+  const aff=asArr(g('AffectedItems'))||[];
+  if(aff.length) kv(aff.length+' affected item'+(aff.length===1?'':'s'), '<div class="tparts">'+aff.slice(0,50).map(it=>{const s=it.Subject||it.InternetMessageId||'(item)';return '<div class="tpart"><span class="tpn" title="'+esc(s)+'">'+esc(s)+'</span></div>';}).join('')+(aff.length>50?'<div class="tpart">… '+(aff.length-50)+' more</div>':'')+'</div>');
+  const sendAs=g('SendAsUserSmtp'); if(sendAs) kv('Sent as', wchip(esc(sendAs),'warn'));
+  const onBehalf=g('SendOnBehalfOfUserSmtp'); if(onBehalf) kv('On behalf of', esc(onBehalf));
+  if(params.length){
+    const want=['Name','From','ForwardTo','RedirectTo','ForwardingSmtpAddress','ForwardingAddress','DeleteMessage','MoveToFolder','SubjectContainsWords','DeliverToMailboxAndForward','GrantSendOnBehalfTo','AccessRights','User'];
+    const shown=params.filter(p=>p&&want.indexOf(p.Name)>=0);
+    (shown.length?shown:params.slice(0,8)).forEach(p=>kv(p.Name, esc(String(p.Value)).slice(0,300)));
+  }
+  const mor=g('ModifiedObjectResolvedName'); if(mor&&!params.length) kv('Object', esc(mor));
+  return dsec('exchange','Exchange — mailbox', rows, lead, wlColor('Exchange'));
+}
+
+/* SharePoint / OneDrive — file & sharing (RT 4/6/7/14) */
+function renderSharePointSection(e){
+  const ad=e.raw; if(!ad||typeof ad!=='object') return '';
+  const g=function(){ return adGet.apply(null,[ad].concat([].slice.call(arguments))); };
+  let rows='',lead='';
+  const kv=(k,h)=>{ if(h!==undefined&&h!==null&&h!=='') rows+='<div class="k">'+esc(k)+'</div><div class="v">'+h+'</div>'; };
+  const op=(e.op||'');
+  const tType=g('TargetUserOrGroupType'), tName=g('TargetUserOrGroupName')||g('UserSharedWith');
+  const guest=String(tType).toLowerCase()==='guest';
+  const actorDom=emailDomain(e.user), tDom=emailDomain(tName);
+  const extTarget=guest||(tDom&&actorDom&&tDom!==actorDom&&tName&&/@|#ext#/i.test(String(tName)));
+  const flags=[];
+  if(/anonymouslink/i.test(op)) flags.push(wchip('⚠ anonymous "anyone" link','warn'));
+  if(extTarget) flags.push(wchip('⚠ external share'+(tDom?' → '+tDom:''),'warn'));
+  if(flags.length) lead=flagRow(flags.join(' '));
+
+  const fn=g('SourceFileName'), ext=g('SourceFileExtension');
+  if(fn) kv('File', esc(fn));
+  else if(g('ObjectId')) kv('Object', esc(shortObj(String(g('ObjectId')))));
+  const site=g('SiteUrl'); if(site) kv('Site', esc(site));
+  const rel=g('SourceRelativeUrl'); if(rel) kv('Path', esc(rel));
+  const destRel=g('DestinationRelativeUrl'), destFn=g('DestinationFileName');
+  if(destRel||destFn) kv('Destination', esc((destRel||'')+(destRel&&destFn?'/':'')+(destFn||'')));
+  const itemType=g('ItemType'); if(itemType) kv('Item type', wchip(itemType));
+  if(tName||tType) kv('Shared with', (tName?esc(String(tName)):'')+(tType?' '+wchip(tType,guest?'warn':''):''));
+  const sharing=g('SharingType'); if(sharing) kv('Permission', esc(String(sharing)));
+  const usid=g('UniqueSharingId'); if(usid) kv('Sharing id', '<span class="tmut">'+esc(usid)+'</span>');
+  const label=g('SensitivityLabelId')||g('SourceLabel'); if(label) kv('Sensitivity', '<span class="tmut">'+esc(String(label))+'</span>');
+  const ua=g('UserAgent'); if(ua&&ua!==e.ua) kv('User agent', esc(ua));
+  const mid=g('MachineId')||g('MachineDomainInfo'); if(mid) kv('Sync device', '<span class="tmut">'+esc(String(mid))+'</span>');
+  const evd=g('EventData'); if(evd&&typeof evd==='string'){ const m=evd.match(/<ExpirationDate>([^<]+)<\/ExpirationDate>/i); if(m) kv('Link expires', esc(m[1])); }
+  return dsec('sharepoint',(e.wl==='OneDrive'?'OneDrive':'SharePoint')+' — file & sharing', rows, lead, wlColor(e.wl||'SharePoint'));
+}
+
+/* Entra ID — directory change (RT 8). Self-suppresses on sign-ins (handled by OAuth section). */
+function renderAADSection(e){
+  const ad=e.raw; if(!ad||typeof ad!=='object') return '';
+  const g=function(){ return adGet.apply(null,[ad].concat([].slice.call(arguments))); };
+  const op=(e.op||'');
+  if(parseInt(g('AzureActiveDirectoryEventType'),10)===0 || /userloggedin|userloginfailed/i.test(op)) return '';
+  let rows='',lead='';
+  const kv=(k,h)=>{ if(h!==undefined&&h!==null&&h!=='') rows+='<div class="k">'+esc(k)+'</div><div class="v">'+h+'</div>'; };
+  const mp=asArr(g('ModifiedProperties'))||[];
+  const principal=arr=>{ arr=asArr(arr)||[]; let upn='',guid=''; arr.forEach(p=>{ const id=p&&p.ID; if(!id)return; if(/@/.test(id))upn=upn||id; else if(/^[0-9a-f]{8}-[0-9a-f-]{20,}$/i.test(id))guid=guid||id; else upn=upn||id; }); return {upn,guid}; };
+  const tgt=principal(g('Target'));
+  const flags=[];
+  if(/add member to role/i.test(op)) flags.push(wchip('⚠ role granted','warn'));
+  if(/consent to application/i.test(op)) flags.push(wchip('⚠ app consent','warn'));
+  if(/service principal credentials|certificates and secrets/i.test(op)) flags.push(wchip('⚠ credential added to app','warn'));
+  if(/disable strong authentication/i.test(op)) flags.push(wchip('⚠ MFA disabled','warn'));
+  if(/add service principal\b/i.test(op)) flags.push(wchip('⚠ new service principal','warn'));
+  if(/\bdomain\b|federation/i.test(op)) flags.push(wchip('⚠ domain / federation','warn'));
+  if(g('SupportTicketId')) flags.push(wchip('partner / on-behalf-of','warn'));
+  if(flags.length) lead=flagRow(flags.join(' '));
+
+  if(tgt.upn||tgt.guid) kv('Target', esc(tgt.upn||tgt.guid)+(tgt.upn&&tgt.guid?' <span class="tmut">'+esc(tgt.guid)+'</span>':''));
+  const role=mpFind(mp,'Role.DisplayName'); if(role){ const rv=decodeMP(role); kv('Role', wchip(rv,/admin/i.test(rv)?'warn':'')); }
+  const isAdmin=mpFind(mp,'ConsentContext.IsAdminConsent'); if(isAdmin!==undefined){ const av=decodeMP(isAdmin); kv('Admin consent', wchip(av, av.toLowerCase()==='true'?'warn':'')); }
+  const perms=mpFind(mp,'ConsentAction.Permissions'); if(perms){ const pv=decodeMP(perms); const sc=(pv.match(/Scope:\s*([^,\]\r\n]+)/gi)||[]).map(s=>s.replace(/Scope:\s*/i,'').trim()).join(', '); const risky=/offline_access|\.All|Mail\.|Files\.|full_access|Directory\./i.test(pv); kv('Permissions',(risky?wchip('⚠ high-risk','warn')+' ':'')+esc((sc||pv).slice(0,300))); }
+  const keyDesc=mpFind(mp,'KeyDescription'); if(keyDesc) kv('Credential', esc(decodeMP(keyDesc).slice(0,200)));
+  const inc=mpFind(mp,'Included Updated Properties'); if(inc) kv('Changed', esc(decodeMP(inc)));
+  const seen={'Role.DisplayName':1,'ConsentContext.IsAdminConsent':1,'ConsentAction.Permissions':1,'KeyDescription':1,'Included Updated Properties':1};
+  mp.filter(p=>p&&p.Name&&!seen[p.Name]).slice(0,8).forEach(p=>{ const o=decodeMP(p.OldValue),n=decodeMP(p.NewValue); if(o===''&&n==='')return; kv(p.Name,(o!==''?'<span class="tmut">'+esc(o.slice(0,80))+'</span> → ':'')+esc(String(n).slice(0,120))); });
+  const cat=fromExtended(ad,'extendedAuditEventCategory'); if(cat) kv('Category', wchip(cat));
+  return dsec('aad','Entra ID — directory change', rows, lead, wlColor('AzureActiveDirectory'));
+}
+
+/* Yammer / Viva Engage (RT 22) */
+function renderYammerSection(e){
+  const ad=e.raw; if(!ad||typeof ad!=='object') return '';
+  const g=function(){ return adGet.apply(null,[ad].concat([].slice.call(arguments))); };
+  let rows='',lead='';
+  const kv=(k,h)=>{ if(h!==undefined&&h!==null&&h!=='') rows+='<div class="k">'+esc(k)+'</div><div class="v">'+h+'</div>'; };
+  const op=(e.op||''), flags=[];
+  if(op==='DataExport'){ const dt=g('DataExportType'); flags.push(wchip('⚠ data export'+(dt?' ('+dt+')':''),'warn')); }
+  if(op==='SupervisorAdminToggled') flags.push(wchip('⚠ private content mode','warn'));
+  if(/networkadminupdated|networkverifiedadminupdated|adduserrole/i.test(op)) flags.push(wchip('⚠ admin role change','warn'));
+  if(op==='SoftDeleteSettingsUpdated') flags.push(wchip('retention policy change','warn'));
+  if(op==='NetworkSecurityConfigurationUpdated') flags.push(wchip('security config change','warn'));
+  if(flags.length) lead=flagRow(flags.join(' '));
+
+  const actor=g('ActorUserId'); if(actor&&actor!==e.user) kv('Actor', esc(actor));
+  const tgtUser=g('TargetUserId'); if(tgtUser) kv('Target user', esc(tgtUser));
+  const grp=g('GroupName'); if(grp) kv('Group', esc(grp));
+  const fn=g('FileName'); if(fn) kv('File', esc(fn)+(g('VersionId')?' <span class="tmut">v'+esc(g('VersionId'))+'</span>':''));
+  const dt=g('DataExportType'); if(dt&&op!=='DataExport') kv('Export type', wchip(dt));
+  if(g('IsSoftDelete')!==undefined){ const soft=String(g('IsSoftDelete')).toLowerCase()==='true'; kv('Retention', wchip(soft?'Soft delete':'Hard delete', soft?'':'warn')); }
+  const net=g('YammerNetworkId'); if(net) kv('Network', '<span class="tmut">'+esc(net)+'</span>');
+  (asArr(g('ModifiedProperties'))||[]).slice(0,6).forEach(p=>{ if(!p||!p.Name)return; const o=decodeMP(p.OldValue),n=decodeMP(p.NewValue); kv(p.Name,(o!==''?'<span class="tmut">'+esc(o.slice(0,60))+'</span> → ':'')+esc(String(n).slice(0,100))); });
+  return dsec('yammer','Yammer / Viva Engage', rows, lead, wlColor('Yammer'));
+}
+
+/* Endpoint DLP (RT 63 / Workload "Endpoint") */
+function renderEndpointSection(e){
+  const ad=e.raw; if(!ad||typeof ad!=='object') return '';
+  const g=function(){ return adGet.apply(null,[ad].concat([].slice.call(arguments))); };
+  let rows='',lead='';
+  const kv=(k,h)=>{ if(h!==undefined&&h!==null&&h!=='') rows+='<div class="k">'+esc(k)+'</div><div class="v">'+h+'</div>'; };
+  // activity may sit under various keys; fall back to Operation
+  let act=g('EndpointDlpUserActivity','Activity','EndpointOperation');
+  if(act&&typeof act==='object') act=act.Activity||act.action||'';
+  const blob=JSON.stringify(ad).toLowerCase();
+  const flags=[];
+  if(g('RemovableMediaDeviceSerialNumber')||/removablemedia|removable media|usb/.test(blob)) flags.push(wchip('⚠ copied to USB','warn'));
+  if(/uploadedtocloud|upload to cloud|copiedtocloud/.test(blob)) flags.push(wchip('⚠ uploaded to cloud','warn'));
+  if(/fileprinted|"print"/.test(blob)) flags.push(wchip('printed','warn'));
+  if(/clipboard/.test(blob)) flags.push(wchip('clipboard','warn'));
+  if(flags.length) lead=flagRow(flags.join(' '));
+
+  if(act) kv('Activity', wchip(String(act)));
+  const dev=g('DeviceName'); if(dev) kv('Device', esc(dev));
+  const fn=g('ObjectId')||g('FileName'); if(fn) kv('File', esc(shortObj(String(fn))));
+  const tp=g('TargetFilePath'); if(tp) kv('Target path', esc(tp));
+  const fsz=fmtBytes(g('FileSize')); if(fsz) kv('Size', fsz);
+  const sit=asArr(g('SensitiveInfoTypeData'))||asArr(g('InfoTypes'))||[];
+  if(sit.length){ const names=sit.map(s=>s&&(s.SensitiveInformationTypeName||s.DN||s.Name)).filter(Boolean); if(names.length) kv('Sensitive info', names.slice(0,6).map(n=>wchip(n,'warn')).join(' ')); }
+  const sha=g('Sha256','Sha1'); if(sha) kv('Hash', '<span class="tmut">'+esc(sha)+'</span>');
+  const rm=[g('RemovableMediaDeviceManufacturer'),g('RemovableMediaDeviceModel'),g('RemovableMediaDeviceSerialNumber')].filter(Boolean).join(' · '); if(rm) kv('USB device', esc(rm));
+  let pol=g('PolicyName'); const pd=asArr(g('PolicyDetails')); if(!pol&&pd&&pd[0]) pol=pd[0].PolicyName; if(pol) kv('Policy', esc(String(pol)));
+  const enf=g('EnforcementMode'); if(enf!==undefined) kv('Enforcement', wchip(String(enf)==='1'?'Audit':String(enf)==='0'?'Off':String(enf)));
+  return dsec('endpoint','Endpoint DLP', rows, lead, wlColor('Endpoint'));
+}
+
+/* PublicEndpoint — undocumented; best evidence = Purview Network DLP (web/cloud/AI egress) */
+function renderPublicEndpointSection(e){
+  const ad=e.raw; if(!ad||typeof ad!=='object') return '';
+  const g=function(){ return adGet.apply(null,[ad].concat([].slice.call(arguments))); };
+  let rows='';
+  const kv=(k,h)=>{ if(h!==undefined&&h!==null&&h!=='') rows+='<div class="k">'+esc(k)+'</div><div class="v">'+h+'</div>'; };
+  const lead=flagRow('<span class="tnote">likely Purview Network DLP — web/cloud/AI egress (workload not officially documented; verify in raw)</span>');
+  const dest=g('TargetDomain','FullUrl','DestinationUrl','TargetUrl','Url'); if(dest) kv('Destination', esc(String(dest)));
+  const app=g('CloudAppName','ApplicationName','DestinationApp','TargetApp'); if(app) kv('App', wchip(app,'warn'));
+  const sit=asArr(g('SensitiveInfoTypeData'))||asArr(g('InfoTypes'))||[];
+  if(sit.length){ const names=sit.map(s=>s&&(s.SensitiveInformationTypeName||s.DN||s.Name)).filter(Boolean); if(names.length) kv('Sensitive info', names.slice(0,6).map(n=>wchip(n,'warn')).join(' ')); }
+  const dev=g('DeviceName'); if(dev) kv('Device', esc(dev));
+  let pol=g('PolicyName'); const pd=asArr(g('PolicyDetails')); if(!pol&&pd&&pd[0]) pol=pd[0].PolicyName; if(pol) kv('Policy', esc(String(pol)));
+  const enf=g('EnforcementMode'); if(enf!==undefined) kv('Enforcement', wchip(String(enf)==='1'?'Audit':String(enf)==='0'?'Off':String(enf)));
+  return dsec('publicendpoint','Network egress (PublicEndpoint)', rows, lead, wlColor('PublicEndpoint'));
 }
 
 /* ---------- file/object pivot ---------- */

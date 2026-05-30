@@ -15,6 +15,7 @@
     --sans:"Segoe UI Variable","Segoe UI",-apple-system,system-ui,"Helvetica Neue",sans-serif;
     --rowh:34px;
     --col-time:170px; --col-op:210px; --col-user:200px; --col-wl:120px; --col-ip:130px;
+    --detail-w:360px; --raw-w:380px;
   }
   *{box-sizing:border-box}
   html,body{height:100%}
@@ -148,9 +149,12 @@
   .dayrow .n{margin-left:auto;color:var(--txt3)}
 
   /* detail + raw panels — independently toggleable, side by side */
-  .detail,.rawpanel{flex:none;display:flex;flex-direction:column;background:var(--panel);overflow:hidden;border-left:1px solid var(--line)}
-  .detail{width:360px}
-  .rawpanel{width:380px}
+  .detail,.rawpanel{flex:none;display:flex;flex-direction:column;background:var(--panel);overflow:hidden;border-left:1px solid var(--line);position:relative}
+  .detail{width:var(--detail-w)}
+  .rawpanel{width:var(--raw-w)}
+  .pbody{flex:1;display:flex;flex-direction:column;min-height:0;overflow:hidden}
+  .pgrip{position:absolute;left:0;top:0;bottom:0;width:6px;cursor:col-resize;z-index:5}
+  .pgrip:hover{background:var(--accent);opacity:.35}
   .body.detail-collapsed .detail{display:none}
   .body.raw-collapsed .rawpanel{display:none}
   .detail .dhead{padding:10px 14px;border-bottom:1px solid var(--line);flex:none}
@@ -312,10 +316,12 @@
       <div id="scroller"><div id="spacer"></div></div>
     </div>
     <div class="detail" id="detail">
-      <div class="empty">Select an event to inspect the full record.</div>
+      <div class="pgrip" data-panel="detail" title="Drag to resize · double-click to reset"></div>
+      <div class="pbody" id="detail-body"><div class="empty">Select an event to inspect the full record.</div></div>
     </div>
     <div class="rawpanel" id="rawpanel">
-      <div class="empty">Select an event to view its raw AuditData.</div>
+      <div class="pgrip" data-panel="raw" title="Drag to resize · double-click to reset"></div>
+      <div class="pbody" id="raw-body"><div class="empty">Select an event to view its raw AuditData.</div></div>
     </div>
   </div>
 
@@ -850,14 +856,14 @@ document.addEventListener('keydown',e=>{
 
 /* ---------- detail panel ---------- */
 function renderRaw(){
-  const r=document.getElementById('rawpanel');
+  const r=document.getElementById('raw-body');
   if(selectedIdx<0||selectedIdx>=FILTERED.length){
     r.innerHTML='<div class="empty">Select an event to view its raw AuditData.</div>'; return;
   }
   r.innerHTML='<div class="rhead">Raw AuditData</div><div class="draw"><pre class="json">'+hl(FILTERED[selectedIdx].raw)+'</pre></div>';
 }
 function renderDetail(){
-  const d=document.getElementById('detail');
+  const d=document.getElementById('detail-body');
   if(selectedIdx<0||selectedIdx>=FILTERED.length){
     d.innerHTML='<div class="empty">Select an event to inspect the full record.</div>'; renderRaw(); return;
   }
@@ -1219,6 +1225,32 @@ document.getElementById('btn-detail').onclick=()=>setPanel('detail', !document.q
 document.getElementById('btn-raw').onclick=()=>setPanel('raw', !document.querySelector('.body').classList.contains('raw-collapsed'));
 try{ if(localStorage.getItem('ual-viewer-detail-collapsed')==='1') setPanel('detail',true); }catch(e){}
 try{ if(localStorage.getItem('ual-viewer-raw-collapsed')==='1') setPanel('raw',true); }catch(e){}
+/* ---------- resizable side panels (drag the left edge) ---------- */
+(function(){
+  const DEF={detail:'360px',raw:'380px'}, VAR={detail:'--detail-w',raw:'--raw-w'};
+  try{ for(const k in VAR){ const v=localStorage.getItem('ual-viewer-'+k+'-w'); if(v) document.documentElement.style.setProperty(VAR[k],v); } }catch(e){}
+  let drag=null;
+  const persist=k=>{ try{ localStorage.setItem('ual-viewer-'+k+'-w', getComputedStyle(document.documentElement).getPropertyValue(VAR[k]).trim()); }catch(e){} };
+  document.querySelectorAll('.pgrip').forEach(g=>{
+    const k=g.dataset.panel;
+    g.addEventListener('mousedown',e=>{
+      drag={k, sx:e.clientX, sw:g.parentElement.getBoundingClientRect().width};
+      document.body.style.cursor='col-resize'; document.body.style.userSelect='none';
+      e.preventDefault(); e.stopPropagation();
+    });
+    g.addEventListener('dblclick',e=>{
+      document.documentElement.style.setProperty(VAR[k],DEF[k]); persist(k);
+      e.preventDefault(); e.stopPropagation();
+    });
+  });
+  document.addEventListener('mousemove',e=>{
+    if(!drag) return;
+    // grip is on the panel's left edge → dragging left widens it
+    const w=Math.max(240, Math.min(820, drag.sw-(e.clientX-drag.sx)));
+    document.documentElement.style.setProperty(VAR[drag.k], w+'px');
+  });
+  document.addEventListener('mouseup',()=>{ if(!drag) return; persist(drag.k); document.body.style.cursor=''; document.body.style.userSelect=''; drag=null; });
+})();
 /* ---------- resizable columns ---------- */
 (function(){
   const COLS=['time','op','user','wl','ip'];

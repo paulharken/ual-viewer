@@ -42,7 +42,8 @@ Embedded commas, doubled quotes, and newlines inside the JSON blob are handled c
 - **Pivot from any record.** Click a user, IP, or object in the detail panel to refocus the whole view. Your current event stays selected so you can keep reading.
 - **Virtualised timeline.** Only the visible window renders, so large exports don't choke the DOM.
 - **Workload-aware.** Events are colour-tagged by workload (SharePoint, Exchange, AzureActiveDirectory, Teams, etc.) with per-workload filter chips.
-- **Raw record on tap.** The detail panel shows the pretty-printed, syntax-highlighted `AuditData` JSON alongside the parsed summary.
+- **Workload-specific context.** The inspector decodes the `AuditData` per workload and surfaces the fields that matter, instead of leaving them in the JSON. **MicrosoftTeams** is implemented first: meeting join/leave + duration, device, attendee/member lists with roles, **external/guest participant flagging** (UPN `#EXT#`, attendee org ≠ tenant), Federated/cross-tenant and Private/Shared channel call-outs, links shared in chat, and app/add-on installs. (Teams schema grounded in [HubTou/tala](https://github.com/HubTou/tala) and the M365 Management Activity API.)
+- **Raw record on tap.** The detail panel shows the pretty-printed, syntax-highlighted `AuditData` JSON alongside the parsed summary — collapsible, so you can hide the blob and keep the decoded fields. The whole inspector panel collapses too, giving the timeline full width.
 - **Export view.** Dumps the currently filtered set to a flat CSV with the key fields, ready to drop into a report or timeline doc.
 
 ## Privacy
@@ -65,6 +66,7 @@ Tracked as GitHub issues.
 - [#5 Bookmarks and annotations](https://github.com/paulharken/ual-viewer/issues/5) — mark key events and export an annotated set for reporting
 - [#6 Node / spider-web graph view](https://github.com/paulharken/ual-viewer/issues/6) — force-directed graph with a focal user/object/IP surrounded by everything connected to it
 - [#7 Context window](https://github.com/paulharken/ual-viewer/issues/7) — ±N minutes around a selected event, across all users, for "pivot to the moment"
+- [#8 Workload-specific detail sections](https://github.com/paulharken/ual-viewer/issues/8) — Teams shipped; Exchange / SharePoint / AAD decoding next
 
 ## Contributing
 

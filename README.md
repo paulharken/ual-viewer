@@ -43,7 +43,8 @@ Embedded commas, doubled quotes, and newlines inside the JSON blob are handled c
 - **Virtualised timeline.** Only the visible window renders, so large exports don't choke the DOM.
 - **Workload-aware.** Events are colour-tagged by workload (SharePoint, Exchange, AzureActiveDirectory, Teams, etc.) with per-workload filter chips.
 - **Workload-specific context.** The inspector decodes the `AuditData` per workload and surfaces the fields that matter, instead of leaving them in the JSON. **MicrosoftTeams** is implemented first: meeting join/leave + duration, device, attendee/member lists with roles, **external/guest participant flagging** (UPN `#EXT#`, attendee org ≠ tenant), Federated/cross-tenant and Private/Shared channel call-outs, links shared in chat, and app/add-on installs. (Teams schema grounded in [HubTou/tala](https://github.com/HubTou/tala) and the M365 Management Activity API.)
-- **Raw record on tap.** The detail panel shows the pretty-printed, syntax-highlighted `AuditData` JSON alongside the parsed summary — collapsible, so you can hide the blob and keep the decoded fields. The whole inspector panel collapses too, giving the timeline full width.
+- **Two inspector panels, your choice.** The decoded **detail** panel and the pretty-printed, syntax-highlighted **raw AuditData** panel are separate and sit side by side. Toggle each independently from the top bar (`hide detail` / `hide raw`) — show one, both, or neither. Hiding both gives the timeline the full window width. Choices persist.
+- **Keyboard-driven.** `↑`/`↓` (or `j`/`k`) walk the timeline, `PgUp`/`PgDn` jump a viewport, `Home`/`End` go to the ends — the selected row scrolls into view and the panels update live.
 - **Export view.** Dumps the currently filtered set to a flat CSV with the key fields, ready to drop into a report or timeline doc.
 
 ## Privacy

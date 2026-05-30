@@ -113,7 +113,7 @@
 
   /* body split */
   .body{flex:1;display:flex;overflow:hidden;min-height:0}
-  .timeline-wrap{flex:1;display:flex;flex-direction:column;min-width:0;border-right:1px solid var(--line);overflow-x:auto}
+  .timeline-wrap{flex:1;display:flex;flex-direction:column;min-width:0;overflow-x:auto}
   .tl-head{display:flex;align-items:center;padding:6px 14px;font-size:10px;color:var(--txt3);
     text-transform:uppercase;letter-spacing:.6px;background:var(--bg2);border-bottom:1px solid var(--line);flex:none;
     min-width:calc(28px + var(--col-time) + var(--col-op) + var(--col-user) + var(--col-wl) + var(--col-ip) + 200px);position:sticky;top:0;z-index:3}
@@ -147,25 +147,24 @@
     font-family:var(--mono);font-size:11px;color:var(--accent);letter-spacing:.5px}
   .dayrow .n{margin-left:auto;color:var(--txt3)}
 
-  /* detail */
-  .detail{width:400px;flex:none;display:flex;flex-direction:column;background:var(--panel);overflow:hidden}
+  /* detail + raw panels — independently toggleable, side by side */
+  .detail,.rawpanel{flex:none;display:flex;flex-direction:column;background:var(--panel);overflow:hidden;border-left:1px solid var(--line)}
+  .detail{width:360px}
+  .rawpanel{width:380px}
   .body.detail-collapsed .detail{display:none}
+  .body.raw-collapsed .rawpanel{display:none}
   .detail .dhead{padding:10px 14px;border-bottom:1px solid var(--line);flex:none}
   .detail .dhead .op{font-size:14px;font-weight:600}
   .detail .dhead .dt{font-family:var(--mono);font-size:11px;color:var(--txt2);margin-top:3px}
-  .detail .empty{flex:1;display:flex;align-items:center;justify-content:center;color:var(--txt3);font-size:12px;text-align:center;padding:20px}
+  .detail .empty,.rawpanel .empty{flex:1;display:flex;align-items:center;justify-content:center;color:var(--txt3);font-size:12px;text-align:center;padding:20px}
   .kv{padding:10px 14px;border-bottom:1px solid var(--line);display:grid;grid-template-columns:110px 1fr;gap:5px 10px;font-size:12px}
   .kv .k{color:var(--txt3);font-size:11px}
   .kv .v{font-family:var(--mono);font-size:11px;word-break:break-all}
   .kv .v a{color:var(--accent);cursor:pointer;text-decoration:none}
   .kv .v a:hover{text-decoration:underline}
+  .rhead{padding:10px 14px;border-bottom:1px solid var(--line);flex:none;font-size:10px;
+    text-transform:uppercase;letter-spacing:.6px;color:var(--txt3)}
   .draw{flex:1;overflow:auto;padding:10px 14px}
-  .draw h4{margin:0 0 6px;font-size:10px;text-transform:uppercase;letter-spacing:.6px;color:var(--txt3);
-    display:flex;align-items:center;gap:6px;cursor:pointer;user-select:none}
-  .draw h4:hover{color:var(--txt2)}
-  .draw h4 .caret{transition:transform .12s;font-size:9px}
-  .draw.collapsed h4 .caret{transform:rotate(-90deg)}
-  .draw.collapsed pre.json{display:none}
   pre.json{margin:0;font-family:var(--mono);font-size:11px;white-space:pre-wrap;word-break:break-word;color:var(--txt2)}
   pre.json .jk{color:#7fb0ff}.json .js{color:#86d293}.json .jn{color:#e0a830}.json .jb{color:#ff8c7a}
   /* workload-specific detail section (Teams) */
@@ -205,7 +204,8 @@
     <div class="stat"><b id="st-users">0</b><span>users</span></div>
     <div class="stat"><b id="st-ips">0</b><span>IPs</span></div>
     <div class="stat"><b id="st-range">—</b><span>span</span></div>
-    <button class="btn sm" id="btn-detail" title="Hide the inspector panel to give the timeline full width">hide detail</button>
+    <button class="btn sm" id="btn-detail" title="Toggle the decoded detail panel">hide detail</button>
+    <button class="btn sm" id="btn-raw" title="Toggle the raw AuditData panel">hide raw</button>
     <button class="btn sm" id="btn-add">+ add CSV</button>
     <button class="btn sm" id="btn-export">export view</button>
     <button class="btn sm" id="btn-reset">reset</button>
@@ -307,6 +307,9 @@
     </div>
     <div class="detail" id="detail">
       <div class="empty">Select an event to inspect the full record.</div>
+    </div>
+    <div class="rawpanel" id="rawpanel">
+      <div class="empty">Select an event to view its raw AuditData.</div>
     </div>
   </div>
 
@@ -573,8 +576,6 @@ let FILES=0;
 const F={ q:'', tz:'utc', from:null, to:null, highonly:false, sort:'asc',
           risks:new Set(), wls:new Set(), tab:'user', user:'', obj:null, ipsel:'', ipwin:1440 };
 let IPSWITCH=null;     // Map(eventRef -> {prevUser, gap}) for the selected IP
-let RAWCOLLAPSED=false; // collapse state of the Raw AuditData JSON section
-try{ RAWCOLLAPSED = localStorage.getItem('ual-viewer-raw-collapsed')==='1'; }catch(e){}
 let selectedIdx=-1;   // index into FILTERED
 let rowItems=[];      // {type:'day'|'ev', ...} virtual list
 let ROWOF=[];         // ROWOF[fidx] = index of that event's row within rowItems (for scroll-into-view)
@@ -840,10 +841,17 @@ document.addEventListener('keydown',e=>{
 });
 
 /* ---------- detail panel ---------- */
+function renderRaw(){
+  const r=document.getElementById('rawpanel');
+  if(selectedIdx<0||selectedIdx>=FILTERED.length){
+    r.innerHTML='<div class="empty">Select an event to view its raw AuditData.</div>'; return;
+  }
+  r.innerHTML='<div class="rhead">Raw AuditData</div><div class="draw"><pre class="json">'+hl(FILTERED[selectedIdx].raw)+'</pre></div>';
+}
 function renderDetail(){
   const d=document.getElementById('detail');
   if(selectedIdx<0||selectedIdx>=FILTERED.length){
-    d.innerHTML='<div class="empty">Select an event to inspect the full record.</div>'; return;
+    d.innerHTML='<div class="empty">Select an event to inspect the full record.</div>'; renderRaw(); return;
   }
   const e=FILTERED[selectedIdx];
   d.innerHTML=
@@ -859,12 +867,8 @@ function renderDetail(){
       '<div class="k">User agent</div><div class="v">'+esc(e.ua||'—')+'</div>'+
     '</div>'+
     (isTeamsEvent(e) ? renderTeamsSection(e) : '')+
-    (e.oauth ? renderOAuthSection(e.oauth) : '')+
-    '<div class="draw'+(RAWCOLLAPSED?' collapsed':'')+'"><h4 id="rawtoggle"><span class="caret">▾</span>Raw AuditData</h4><pre class="json">'+hl(e.raw)+'</pre></div>';
-  const rawtog=d.querySelector('#rawtoggle');
-  if(rawtog) rawtog.onclick=()=>{ const dr=rawtog.closest('.draw');
-    RAWCOLLAPSED=!dr.classList.contains('collapsed'); dr.classList.toggle('collapsed',RAWCOLLAPSED);
-    try{ localStorage.setItem('ual-viewer-raw-collapsed',RAWCOLLAPSED?'1':'0'); }catch(e){} };
+    (e.oauth ? renderOAuthSection(e.oauth) : '');
+  renderRaw();
   d.querySelectorAll('a[data-act]').forEach(a=>{
     a.onclick=()=>{ const act=a.dataset.act, val=a.dataset.val;
       const pivotEv=selectedIdx>=0?FILTERED[selectedIdx]:null;
@@ -1172,19 +1176,20 @@ document.getElementById('objclear').onclick=()=>{F.obj=null;document.getElementB
   renderObjList();renderObjSummary();applyFilters();};
 document.getElementById('btn-add').onclick=()=>fileInput.click();
 document.getElementById('btn-export').onclick=exportCSV;
-/* ---------- collapsible detail panel ---------- */
-function setDetailCollapsed(collapsed){
-  document.querySelector('.body').classList.toggle('detail-collapsed',collapsed);
-  const btn=document.getElementById('btn-detail');
-  btn.textContent = collapsed ? 'show detail' : 'hide detail';
-  btn.title = collapsed ? 'Show the record inspector panel' : 'Hide the inspector panel to give the timeline full width';
-  try{ localStorage.setItem('ual-viewer-detail-collapsed',collapsed?'1':'0'); }catch(e){}
-  if(!collapsed) renderDetail();
+/* ---------- collapsible side panels (detail + raw, independent) ---------- */
+function setPanel(which, collapsed){
+  const cls = which==='detail' ? 'detail-collapsed' : 'raw-collapsed';
+  const btn = document.getElementById(which==='detail' ? 'btn-detail' : 'btn-raw');
+  const lbl = which==='detail' ? 'detail' : 'raw';
+  document.querySelector('.body').classList.toggle(cls,collapsed);
+  btn.textContent = (collapsed?'show ':'hide ')+lbl;
+  try{ localStorage.setItem('ual-viewer-'+cls, collapsed?'1':'0'); }catch(e){}
+  if(!collapsed){ if(which==='detail') renderDetail(); else renderRaw(); }
 }
-document.getElementById('btn-detail').onclick=()=>{
-  setDetailCollapsed(!document.querySelector('.body').classList.contains('detail-collapsed'));
-};
-try{ if(localStorage.getItem('ual-viewer-detail-collapsed')==='1') setDetailCollapsed(true); }catch(e){}
+document.getElementById('btn-detail').onclick=()=>setPanel('detail', !document.querySelector('.body').classList.contains('detail-collapsed'));
+document.getElementById('btn-raw').onclick=()=>setPanel('raw', !document.querySelector('.body').classList.contains('raw-collapsed'));
+try{ if(localStorage.getItem('ual-viewer-detail-collapsed')==='1') setPanel('detail',true); }catch(e){}
+try{ if(localStorage.getItem('ual-viewer-raw-collapsed')==='1') setPanel('raw',true); }catch(e){}
 /* ---------- resizable columns ---------- */
 (function(){
   const COLS=['time','op','user','wl','ip'];

@@ -18,17 +18,17 @@ That's it. No install, no build step, no network calls.
 
 The parser handles the three CSV shapes you'll see in the wild:
 
-- **Microsoft-DFIR-Extractor-Suite `Get-UAL`** — wrapper columns plus an `AuditData` JSON blob
+- **Invictus IR Extractor Suite `Get-UAL`** — wrapper columns plus an `AuditData` JSON blob
 - **`Get-UAL -AuditDataOnly`** — flattened, AuditData fields promoted to top-level columns
-- **Purview portal export** — same `AuditData` blob shape as Extractor Suite
+- **Purview portal export** — same `AuditData` blob shape as the Extractor Suite
 
 Embedded commas, doubled quotes, and newlines inside the JSON blob are handled correctly. Rows without a usable timestamp are skipped and reported in the load status, so you'll know if anything didn't make it in.
 
 ## Two workflows it's built for
 
-**1. User activity walkthrough.** Pull a `userID` with the Extractor Suite, drop the CSV, pick the user from the dropdown on the **User activity** tab. The timeline scopes to everything that account did, in order, with risk-classified events.
+**1. User activity walkthrough.** Pull a `userID` with the Invictus Extractor Suite, drop the CSV, pick the user from the dropdown on the **User activity** tab. The timeline scopes to everything that account did, in order, with risk-classified events.
 
-**2. File / object focus.** Pull a SharePoint or OneDrive object with the Extractor Suite, drop the CSV, switch to the **File / object focus** tab, and search by filename or path fragment. Select a matching `ObjectId` to see a summary card (first seen, last seen, distinct users, distinct IPs, top operations) plus the scoped timeline.
+**2. File / object focus.** Pull a SharePoint or OneDrive object with the Invictus Extractor Suite, drop the CSV, switch to the **File / object focus** tab, and search by filename or path fragment. Select a matching `ObjectId` to see a summary card (first seen, last seen, distinct users, distinct IPs, top operations) plus the scoped timeline.
 
 ## DFIR-relevant features
 

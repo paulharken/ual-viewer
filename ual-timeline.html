@@ -84,6 +84,7 @@
   .chip .ct{font-family:var(--mono);font-size:10px;color:var(--txt3)}
   .chip.on .ct{color:rgba(255,255,255,.7)}
   .chip .dot{width:8px;height:8px;border-radius:50%}
+  #opchips{max-height:80px;overflow-y:auto}
 
   /* tabs */
   .tabs{display:flex;gap:0;background:var(--bg2);border-bottom:1px solid var(--line);flex:none}
@@ -213,6 +214,10 @@
   .ts-legend .tl{display:inline-flex;align-items:center;gap:4px}
   .ts-legend .tl i{width:8px;height:8px;border-radius:50%;display:inline-block}
   #pivot-timeline .seg button{text-transform:none}
+  #tswinval,#tswinunit{font-family:var(--sans);font-size:12px;color:var(--txt);background:var(--panel);
+    border:1px solid var(--line2);border-radius:6px;padding:6px 9px;outline:none}
+  #tswinval{width:60px}
+  #tswinval:focus,#tswinunit:focus{border-color:var(--accent)}
 </style>
 </head>
 <body>
@@ -229,6 +234,7 @@
     <div class="stat"><b id="st-users">0</b><span>users</span></div>
     <div class="stat"><b id="st-ips">0</b><span>IPs</span></div>
     <div class="stat"><b id="st-range">—</b><span>span</span></div>
+    <button class="btn sm" id="btn-back" title="Go back to the previous view (Alt+←)" disabled>← back</button>
     <button class="btn sm" id="btn-detail" title="Toggle the decoded detail panel">hide detail</button>
     <button class="btn sm" id="btn-raw" title="Toggle the raw AuditData panel">hide raw</button>
     <button class="btn sm" id="btn-add">+ add CSV</button>
@@ -246,7 +252,7 @@
     <input type="file" id="file" accept=".csv,text/csv" multiple style="display:none">
   </div>
   <div class="usecases">
-    <div class="uc"><b>UAL Chef</b><span>An in-browser UAL viewer — nothing leaves the browser. Inspired by CyberChef, UAL Chef offers DFIR staff a quick way to visually triage UAL files.</span></div>
+    <div class="uc"><b>UAL TIMELINER</b><span>An in-browser UAL viewer. Designed with opsec in mind, this tool runs natively in your browser. No data leaves your machine.</span></div>
   </div>
   <div id="parsestatus" class="pill"></div>
 </div>
@@ -273,6 +279,7 @@
 
   <div class="chips" id="riskchips"></div>
   <div class="chips" id="wlchips"></div>
+  <div class="chips" id="opchips"></div>
 
   <div class="tabs">
     <button data-tab="user" class="on">User activity</button>
@@ -305,15 +312,11 @@
   <div class="pivot" id="pivot-timeline">
     <div class="row">
       <span class="lbl">window</span>
-      <div class="seg" id="tswinseg">
-        <button data-win="5">5s</button>
-        <button data-win="10" class="on">10s</button>
-        <button data-win="20">20s</button>
-        <button data-win="30">30s</button>
-        <button data-win="60">60s</button>
-        <button data-win="90">90s</button>
-        <button data-win="120">120s</button>
-      </div>
+      <input type="number" id="tswinval" min="1" step="1" value="10" title="Total time span shown across the view">
+      <select id="tswinunit">
+        <option value="1" selected>seconds</option>
+        <option value="60">minutes</option>
+      </select>
       <span class="lbl">centre</span>
       <span class="pill" id="ts-centre">—</span>
       <button class="btn sm" id="ts-fit" title="Recentre on the middle of the filtered log">fit</button>
@@ -627,7 +630,7 @@ let EVENTS=[];        // all normalised
 let FILTERED=[];      // current view
 let FILES=0;
 const F={ q:'', tz:'utc', from:null, to:null, highonly:false, sort:'asc',
-          risks:new Set(), wls:new Set(), tab:'user', user:'', obj:null, ipsel:'', ipwin:1440,
+          risks:new Set(), wls:new Set(), ops:new Set(), tab:'user', user:'', obj:null, ipsel:'', ipwin:1440,
           tsCenter:null, tsWin:10 };
 let IPSWITCH=null;     // Map(eventRef -> {prevUser, gap}) for the selected IP
 const SECCOLLAPSE={};  // collapsed state of detail sub-sections (per-workload + oauth)
@@ -665,6 +668,7 @@ function afterLoad(){
   document.getElementById('loader').style.display='none';
   document.getElementById('app').style.display='flex';
   document.getElementById('statbar').style.display='flex';
+  NAV=[]; updateBackBtn();
   applyFilters();
 }
 
@@ -709,6 +713,18 @@ function buildChips(){
       else{F.wls.add(w);c.classList.add('on');c.style.background=col;} applyFilters(); };
     wc.appendChild(c);
   });
+  // operation
+  const ocounts={}, orisk={}; EVENTS.forEach(e=>{const o=e.op||'(none)';ocounts[o]=(ocounts[o]||0)+1;
+    if(orisk[o]===undefined)orisk[o]=e.risk;});
+  const oc=document.getElementById('opchips'); oc.innerHTML='<span class="lbl" style="align-self:center">operation</span>';
+  Object.keys(ocounts).sort((a,b)=>ocounts[b]-ocounts[a]).forEach(o=>{
+    const ocol=RISK_COLOR[orisk[o]]||RISK_COLOR.info;
+    const c=document.createElement('div'); c.className='chip'; c.dataset.op=o;
+    c.innerHTML='<span class="dot" style="background:'+ocol+'"></span>'+esc(o)+' <span class="ct">'+ocounts[o]+'</span>';
+    c.onclick=()=>{ if(F.ops.has(o)){F.ops.delete(o);c.classList.remove('on');c.style.background='';}
+      else{F.ops.add(o);c.classList.add('on');c.style.background=ocol;} applyFilters(); };
+    oc.appendChild(c);
+  });
 }
 function buildUserSelect(){
   const counts={}; EVENTS.forEach(e=>{if(e.user)counts[e.user]=(counts[e.user]||0)+1;});
@@ -745,6 +761,7 @@ function applyFilters(){
     if(F.highonly && e.risk!=='high') return false;
     if(F.risks.size && !F.risks.has(e.risk)) return false;
     if(F.wls.size && !F.wls.has(e.wl||'(none)')) return false;
+    if(F.ops.size && !F.ops.has(e.op||'(none)')) return false;
     if(F.from && e.ts < F.from) return false;
     if(F.to && e.ts > F.to) return false;
     if(F.tab==='user' && F.user && e.user!==F.user) return false;
@@ -859,7 +876,8 @@ function paintWindow(){
 }
 function countDay(dayIdx){let c=0;for(let i=dayIdx+1;i<rowItems.length&&rowItems[i].type==='ev';i++)c++;return c;}
 scroller.addEventListener('scroll',()=>{ if(rowItems.length) paintWindow(); });
-window.addEventListener('resize',()=>{ if(rowItems.length) paintWindow(); });
+window.addEventListener('resize',()=>{ if(rowItems.length) paintWindow();
+  if(F.tab==='timeline' && TS.ctx){ tsSize(); renderTimeSlice(); } });
 spacer.addEventListener('click',e=>{
   const row=e.target.closest('.ev'); if(!row)return;
   selectedIdx=parseInt(row.dataset.fidx,10); paintWindow(); renderDetail();
@@ -879,6 +897,7 @@ function selectRow(idx){
 // keyboard navigation through the timeline
 document.addEventListener('keydown',e=>{
   if(document.getElementById('app').style.display==='none') return;        // not loaded
+  if(e.altKey && e.key==='ArrowLeft'){ navBack(); e.preventDefault(); return; }   // back
   if(e.ctrlKey||e.metaKey||e.altKey) return;                               // leave shortcuts alone
   const t=e.target, tag=t&&t.tagName;
   if(tag==='INPUT'||tag==='SELECT'||tag==='TEXTAREA') return;              // typing in a field
@@ -928,7 +947,7 @@ function renderDetail(){
     (e.oauth ? renderOAuthSection(e.oauth) : '');
   renderRaw();
   d.querySelectorAll('a[data-act]').forEach(a=>{
-    a.onclick=()=>{ const act=a.dataset.act, val=a.dataset.val;
+    a.onclick=()=>{ recordNav(); const act=a.dataset.act, val=a.dataset.val;
       const pivotEv=selectedIdx>=0?FILTERED[selectedIdx]:null;
       if(act==='user'){ setTab('user'); F.user=val; document.getElementById('userselect').value=val; }
       else if(act==='obj'){ setTab('file'); selectObject(val); }
@@ -1391,7 +1410,7 @@ function renderObjList(){
     '<span class="c">'+o.count+'</span></div>').join('') ||
     '<div class="objrow"><span class="nm">no matching objects</span></div>';
   if(res.length>cap) list.innerHTML+='<div class="objrow"><span class="nm">… '+(res.length-cap)+' more, narrow your search</span></div>';
-  list.querySelectorAll('.objrow[data-obj]').forEach(r=>r.onclick=()=>selectObject(r.dataset.obj));
+  list.querySelectorAll('.objrow[data-obj]').forEach(r=>r.onclick=()=>{recordNav();selectObject(r.dataset.obj);});
 }
 function selectObject(obj){
   F.obj=obj;
@@ -1538,9 +1557,10 @@ function tsSize(){
   TS.dpr=window.devicePixelRatio||1;
   const orc=TS.over.getBoundingClientRect(), crc=TS.canvas.getBoundingClientRect();
   TS.ow=orc.width; TS.oh=orc.height; TS.w=crc.width; TS.h=crc.height;
+  // only set the backing-store size (in device px); let CSS (width:100% / flex) drive the
+  // display size, so the canvases keep stretching with the container instead of freezing.
   [[TS.over,TS.octx,TS.ow,TS.oh],[TS.canvas,TS.ctx,TS.w,TS.h]].forEach(a=>{ const cv=a[0],ct=a[1],w=a[2],h=a[3];
-    cv.width=Math.round(w*TS.dpr); cv.height=Math.round(h*TS.dpr);
-    cv.style.width=w+'px'; cv.style.height=h+'px'; ct.setTransform(TS.dpr,0,0,TS.dpr,0,0); });
+    cv.width=Math.round(w*TS.dpr); cv.height=Math.round(h*TS.dpr); ct.setTransform(TS.dpr,0,0,TS.dpr,0,0); });
 }
 function tsNiceStep(spanSec){ const cands=[1,2,5,10,15,20,30,60]; const target=spanSec/7;
   for(const c of cands) if(c>=target) return c; return 60; }
@@ -1672,6 +1692,53 @@ function setTab(t){
   if(t==='timeline') enterTimeSlice();
 }
 
+/* ---------- navigation history (back button) ---------- */
+let NAV=[];               // stack of prior view snapshots
+let navApplying=false;    // guard so restoring doesn't record itself
+function snapState(){
+  return { tab:F.tab, user:F.user, obj:F.obj, ipsel:F.ipsel, q:F.q, highonly:F.highonly,
+    sort:F.sort, ipwin:F.ipwin, from:F.from, to:F.to, tsCenter:F.tsCenter, tsWin:F.tsWin,
+    risks:[...F.risks], wls:[...F.wls], ops:[...F.ops], sel:selectedIdx };
+}
+function updateBackBtn(){ const b=document.getElementById('btn-back'); if(b) b.disabled=NAV.length===0; }
+function recordNav(){ if(navApplying) return; const s=snapState();
+  const top=NAV[NAV.length-1];
+  if(top && JSON.stringify(top)===JSON.stringify(s)) return;   // skip no-op pivots
+  NAV.push(s); if(NAV.length>200) NAV.shift(); updateBackBtn();
+}
+function syncChipStates(){
+  document.querySelectorAll('#riskchips .chip').forEach(c=>{ const on=F.risks.has(c.dataset.risk);
+    c.classList.toggle('on',on); c.style.background=on?RISK_COLOR[c.dataset.risk]:''; });
+  document.querySelectorAll('#wlchips .chip').forEach(c=>{ const on=F.wls.has(c.dataset.wl);
+    c.classList.toggle('on',on); c.style.background=on?wlColor(c.dataset.wl):''; });
+  document.querySelectorAll('#opchips .chip').forEach(c=>{ const on=F.ops.has(c.dataset.op);
+    const dot=c.querySelector('.dot'); c.classList.toggle('on',on);
+    c.style.background=on&&dot?dot.style.background:''; });
+}
+function restoreState(s){
+  navApplying=true;
+  F.q=s.q; F.highonly=s.highonly; F.sort=s.sort; F.ipwin=s.ipwin; F.from=s.from; F.to=s.to;
+  F.tsCenter=s.tsCenter; F.tsWin=s.tsWin; F.user=s.user; F.obj=s.obj; F.ipsel=s.ipsel;
+  F.risks=new Set(s.risks); F.wls=new Set(s.wls); F.ops=new Set(s.ops);
+  setTab(s.tab);
+  document.getElementById('search').value=s.q;
+  document.getElementById('highonly').checked=s.highonly;
+  const us=document.getElementById('userselect'); if(us) us.value=s.user||'';
+  const is=document.getElementById('ipselect'); if(is) is.value=s.ipsel||'';
+  document.getElementById('ipwindow').value=String(s.ipwin);
+  document.querySelectorAll('#sortseg button').forEach(b=>b.classList.toggle('on',b.dataset.s===s.sort));
+  syncTsWinControl();
+  document.getElementById('objclear').style.display=s.obj?'inline':'none';
+  syncChipStates();
+  computeIpSwitch();
+  if(F.tab==='ip') renderIpSummary();
+  if(F.tab==='file'){ if(OBJINDEX) renderObjList(); renderObjSummary(); }
+  applyFilters();
+  if(s.sel>=0 && s.sel<FILTERED.length){ selectedIdx=s.sel; paintWindow(); renderTimeSlice(); renderDetail(); }
+  navApplying=false; updateBackBtn();
+}
+function navBack(){ if(NAV.length) restoreState(NAV.pop()); }
+
 /* ---------- wire up ---------- */
 const drop=document.getElementById('drop'), fileInput=document.getElementById('file');
 drop.onclick=()=>fileInput.click();
@@ -1698,21 +1765,28 @@ document.getElementById('sortseg').onclick=e=>{ if(e.target.dataset.s){
   F.sort=e.target.dataset.s; document.querySelectorAll('#sortseg button').forEach(b=>b.classList.toggle('on',b===e.target));
   applyFilters();
 }};
-document.querySelectorAll('.tabs button').forEach(b=>b.onclick=()=>{setTab(b.dataset.tab);applyFilters();});
-document.getElementById('userselect').onchange=e=>{F.user=e.target.value;
+document.querySelectorAll('.tabs button').forEach(b=>b.onclick=()=>{recordNav();setTab(b.dataset.tab);applyFilters();});
+document.getElementById('userselect').onchange=e=>{recordNav();F.user=e.target.value;
   document.getElementById('userpill').textContent=e.target.value?'':''; applyFilters();};
-document.getElementById('ipselect').onchange=e=>{ selectIp(e.target.value); };
+document.getElementById('ipselect').onchange=e=>{ recordNav(); selectIp(e.target.value); };
 document.getElementById('ipwindow').onchange=e=>{ F.ipwin=parseInt(e.target.value,10)||0;
   computeIpSwitch(); renderIpSummary(); if(rowItems.length) paintWindow(); };
 document.getElementById('objsearch').oninput=()=>renderObjList();
-document.getElementById('objclear').onclick=()=>{F.obj=null;document.getElementById('objclear').style.display='none';
+document.getElementById('objclear').onclick=()=>{recordNav();F.obj=null;document.getElementById('objclear').style.display='none';
   renderObjList();renderObjSummary();applyFilters();};
-// time-slice controls
-document.getElementById('tswinseg').onclick=e=>{ if(e.target.dataset.win){
-  F.tsWin=parseInt(e.target.dataset.win,10)||10;
-  document.querySelectorAll('#tswinseg button').forEach(b=>b.classList.toggle('on',b===e.target));
-  renderTimeSlice();
-}};
+// time-slice controls — free numeric window in seconds or minutes
+function applyTsWin(){
+  const vi=document.getElementById('tswinval'), ui=document.getElementById('tswinunit');
+  const v=Math.max(1, parseInt(vi.value,10)||1), mult=parseInt(ui.value,10)||1;
+  F.tsWin=v*mult; renderTimeSlice();
+}
+function syncTsWinControl(){
+  const vi=document.getElementById('tswinval'), ui=document.getElementById('tswinunit'); if(!vi||!ui) return;
+  if(F.tsWin>=60 && F.tsWin%60===0){ ui.value='60'; vi.value=String(F.tsWin/60); }
+  else { ui.value='1'; vi.value=String(F.tsWin); }
+}
+document.getElementById('tswinval').oninput=applyTsWin;
+document.getElementById('tswinunit').onchange=applyTsWin;
 document.getElementById('ts-fit').onclick=()=>{ if(TS.minTs){ F.tsCenter=(TS.minTs+TS.maxTs)/2; renderTimeSlice(); } };
 document.getElementById('btn-add').onclick=()=>fileInput.click();
 document.getElementById('btn-export').onclick=exportCSV;
@@ -1726,6 +1800,7 @@ function setPanel(which, collapsed){
   try{ localStorage.setItem('ual-viewer-'+cls, collapsed?'1':'0'); }catch(e){}
   if(!collapsed){ if(which==='detail') renderDetail(); else renderRaw(); }
 }
+document.getElementById('btn-back').onclick=navBack;
 document.getElementById('btn-detail').onclick=()=>setPanel('detail', !document.querySelector('.body').classList.contains('detail-collapsed'));
 document.getElementById('btn-raw').onclick=()=>setPanel('raw', !document.querySelector('.body').classList.contains('raw-collapsed'));
 try{ if(localStorage.getItem('ual-viewer-detail-collapsed')==='1') setPanel('detail',true); }catch(e){}
@@ -1794,9 +1869,9 @@ try{ if(localStorage.getItem('ual-viewer-raw-collapsed')==='1') setPanel('raw',t
 })();
 
 document.getElementById('btn-reset').onclick=()=>{
-  F.tsCenter=null; F.tsWin=10; TS.drag=null;
-  document.querySelectorAll('#tswinseg button').forEach(b=>b.classList.toggle('on',b.dataset.win==='10'));
-  EVENTS=[];FILTERED=[];FILES=0;OBJINDEX=null;F.user='';F.obj=null;F.q='';F.risks.clear();F.wls.clear();
+  F.tsCenter=null; F.tsWin=10; TS.drag=null; syncTsWinControl();
+  NAV=[];updateBackBtn();
+  EVENTS=[];FILTERED=[];FILES=0;OBJINDEX=null;F.user='';F.obj=null;F.q='';F.risks.clear();F.wls.clear();F.ops.clear();
   F.from=F.to=null;F.highonly=false;F.ipsel='';F.ipwin=1440;IPSWITCH=null;IPUSERS=null;
   document.getElementById('app').style.display='none';
   document.getElementById('statbar').style.display='none';

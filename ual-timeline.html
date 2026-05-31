@@ -199,21 +199,19 @@
   .footer{flex:none;padding:4px 14px;background:var(--bg2);border-top:1px solid var(--line);
     font-size:10px;color:var(--txt3);display:flex;gap:16px;font-family:var(--mono)}
 
-  /* entity graph view */
-  .body.graph-on .timeline-wrap{display:none}
-  .graph-wrap{flex:1;min-width:0;position:relative;display:none;background:var(--bg)}
-  .body.graph-on .graph-wrap{display:block}
-  #gcanvas{display:block;width:100%;height:100%}
-  .ghud{position:absolute;pointer-events:none;background:rgba(10,14,20,.94);border:1px solid var(--line2);
-    color:var(--txt);font-size:11px;font-family:var(--mono);padding:3px 7px;border-radius:5px;white-space:nowrap;display:none;z-index:6;max-width:360px;overflow:hidden;text-overflow:ellipsis}
-  .ghint{position:absolute;left:12px;bottom:10px;font-size:10px;color:var(--txt3);font-family:var(--mono);pointer-events:none}
-  #pivot-graph .seg button{text-transform:none}
-  #gvalue,#gtopn{font-family:var(--sans);font-size:12px;color:var(--txt);background:var(--panel);
-    border:1px solid var(--line2);border-radius:6px;padding:6px 9px;outline:none}
-  #gvalue:focus,#gtopn:focus{border-color:var(--accent)}
-  .glegend{display:inline-flex;gap:12px;align-items:center;margin-left:auto;font-size:10px;color:var(--txt3);flex-wrap:wrap}
-  .glegend .gl{display:inline-flex;align-items:center;gap:4px}
-  .glegend .gl i{width:8px;height:8px;border-radius:50%;display:inline-block}
+  /* time-slice view */
+  .body.timeline-on .timeline-wrap{display:none}
+  .ts-wrap{flex:1;min-width:0;position:relative;display:none;background:var(--bg);flex-direction:column}
+  .body.timeline-on .ts-wrap{display:flex}
+  #tsover{display:block;width:100%;height:46px;flex:none;border-bottom:1px solid var(--line);cursor:pointer}
+  #tscanvas{display:block;width:100%;flex:1;min-height:0;cursor:grab}
+  #tscanvas.scrubbing{cursor:grabbing}
+  .ts-hint{position:absolute;left:12px;bottom:8px;font-size:10px;color:var(--txt3);
+    font-family:var(--mono);pointer-events:none}
+  .ts-legend{display:inline-flex;gap:10px;align-items:center;font-size:10px;color:var(--txt3);flex-wrap:wrap}
+  .ts-legend .tl{display:inline-flex;align-items:center;gap:4px}
+  .ts-legend .tl i{width:8px;height:8px;border-radius:50%;display:inline-block}
+  #pivot-timeline .seg button{text-transform:none}
 </style>
 </head>
 <body>
@@ -280,7 +278,7 @@
     <button data-tab="user" class="on">User activity</button>
     <button data-tab="file">File / object focus</button>
     <button data-tab="ip">IP / session focus</button>
-    <button data-tab="graph">Graph</button>
+    <button data-tab="timeline">Time slice</button>
   </div>
 
   <!-- user pivot -->
@@ -303,20 +301,19 @@
     <div class="summary" id="objsummary"></div>
   </div>
 
-  <!-- graph pivot -->
-  <div class="pivot" id="pivot-graph">
+  <!-- timeline (time-slice) pivot -->
+  <div class="pivot" id="pivot-timeline">
     <div class="row">
-      <span class="lbl">centre</span>
-      <div class="seg" id="gtypeseg">
-        <button data-gt="user" class="on">User</button>
-        <button data-gt="obj">Object</button>
-        <button data-gt="ip">IP</button>
+      <span class="lbl">window</span>
+      <div class="seg" id="tswinseg">
+        <button data-win="5">5s</button>
+        <button data-win="10" class="on">10s</button>
+        <button data-win="20">20s</button>
       </div>
-      <select id="gvalue" style="flex:1;min-width:200px;max-width:420px"></select>
-      <span class="lbl">satellites</span>
-      <select id="gtopn"><option>6</option><option selected>10</option><option>15</option><option>20</option></select>
-      <button class="btn sm" id="gfit" title="Re-seed and recentre the layout">fit</button>
-      <span class="glegend" id="glegend"></span>
+      <span class="lbl">centre</span>
+      <span class="pill" id="ts-centre">—</span>
+      <button class="btn sm" id="ts-fit" title="Recentre on the middle of the filtered log">fit</button>
+      <span class="ts-legend" id="ts-legend" style="margin-left:auto"></span>
     </div>
   </div>
 
@@ -349,10 +346,10 @@
       </div>
       <div id="scroller"><div id="spacer"></div></div>
     </div>
-    <div class="graph-wrap" id="graph-wrap">
-      <canvas id="gcanvas"></canvas>
-      <div class="ghud" id="ghud"></div>
-      <div class="ghint">click node = re-centre (user/object/IP) · click edge = scope timeline · right-click = pin · drag to move</div>
+    <div class="ts-wrap" id="ts-wrap">
+      <canvas id="tsover"></canvas>
+      <canvas id="tscanvas"></canvas>
+      <div class="ts-hint">drag the axis to scrub · drag the overview box to move · click a mark to inspect</div>
     </div>
     <div class="detail" id="detail">
       <div class="pgrip" data-panel="detail" title="Drag to resize · double-click to reset"></div>
@@ -627,7 +624,7 @@ let FILTERED=[];      // current view
 let FILES=0;
 const F={ q:'', tz:'utc', from:null, to:null, highonly:false, sort:'asc',
           risks:new Set(), wls:new Set(), tab:'user', user:'', obj:null, ipsel:'', ipwin:1440,
-          graphType:'', graphValue:'', graphTopN:10 };
+          tsCenter:null, tsWin:10 };
 let IPSWITCH=null;     // Map(eventRef -> {prevUser, gap}) for the selected IP
 const SECCOLLAPSE={};  // collapsed state of detail sub-sections (per-workload + oauth)
 try{ ['oauth','teams','exchange','sharepoint','aad','yammer','endpoint','mip','dlp'].forEach(k=>{ if(localStorage.getItem('ual-viewer-sec-'+k)==='1') SECCOLLAPSE[k]=true; }); }catch(e){}
@@ -757,9 +754,10 @@ function applyFilters(){
   buildRowItems();
   renderStats();
   renderTimeline();
+  renderTimeSlice();
   renderDetail();
   document.getElementById('f-mode').textContent =
-     F.tab==='graph'? ('graph: '+(F.graphType||'user')+(F.graphValue?' = '+shortObj(F.graphValue):''))
+     F.tab==='timeline'? ('slice: '+F.tsWin+'s window')
    : F.tab==='user' ? (F.user?('user: '+F.user):'all users')
    : F.tab==='ip'   ? (F.ipsel?('ip: '+F.ipsel):'no IP selected')
    : (F.obj?('object: '+shortObj(F.obj)):'no object selected');
@@ -1500,169 +1498,155 @@ function exportCSV(){
   a.click(); URL.revokeObjectURL(a.href);
 }
 
-/* ---------- entity graph view (issue #6) ---------- */
-const GTYPE_COLOR={user:'#4aa3ff', ip:'#f0a830', obj:'#3fb950', op:'#8a93a6', site:'#2aa9a0'};
-const GRISKORD={info:0, low:1, med:2, high:3};
-const GEDGE_COLOR={high:'#ff5d5d', med:'#f0a830', low:'#4aa3ff', info:'#5b6678'};
-function gtypeColor(gt,val){ return gt==='wl'?wlColor(val):(GTYPE_COLOR[gt]||'#8a93a6'); }
-const GRAPH={ nodes:[], edges:[], pos:new Map(), running:false, raf:0, hover:null, hoverEdge:null, drag:null, expand:{}, w:0, h:0 };
-let gcanvas=null, gctx=null, gWired=false;
-const GID_CENTER=' center';
+/* ---------- time-slice view ---------- */
+const RISK_HEX={high:'#ff5d5d', med:'#f0a830', low:'#4aa3ff', info:'#8a93a6'};
+function riskHex(r){ return RISK_HEX[r]||'#8a93a6'; }
+const TS_AXIS_H=34;     // px reserved at bottom of fine canvas for the axis
+const TS_DOT_R=4;       // mark radius
+const TS={ canvas:null, ctx:null, over:null, octx:null, wired:false,
+           w:0, h:0, ow:0, oh:0, dpr:1, minTs:0, maxTs:0,
+           lanes:[], laneOf:{}, marks:[], drag:null };
 
-function graphCenter(){ // resolve {type,value}, defaulting from focal entity / top user
-  let t=F.graphType, v=F.graphValue;
-  if(!t){
-    if(F.obj){t='obj';v=F.obj;} else if(F.ipsel){t='ip';v=F.ipsel;} else if(F.user){t='user';v=F.user;}
-    else { const c={}; EVENTS.forEach(e=>{if(e.user)c[e.user]=(c[e.user]||0)+1;}); t='user'; v=Object.keys(c).sort((a,b)=>c[b]-c[a])[0]||''; }
-    F.graphType=t; F.graphValue=v;
-  }
-  return {type:t, value:v};
+function tsHalf(){ return F.tsWin*500; }                 // half window in ms (= tsWin*1000/2)
+function tsX(ms){ const half=tsHalf(); return ((ms-(F.tsCenter-half))/(half*2))*TS.w; }
+function tsXinv(x){ const half=tsHalf(); return (F.tsCenter-half)+(x/TS.w)*(half*2); }
+function tsOverX(ms){ const span=(TS.maxTs-TS.minTs)||1; return ((ms-TS.minTs)/span)*TS.ow; }
+function tsOverXinv(x){ const span=(TS.maxTs-TS.minTs)||1; return TS.minTs+(x/TS.ow)*span; }
+function clampCenter(ms){ return Math.max(TS.minTs, Math.min(TS.maxTs, ms)); }
+
+function tsBounds(){ // full filtered range; seed + clamp the centre
+  if(!FILTERED.length){ TS.minTs=TS.maxTs=0; return; }
+  let lo=FILTERED[0].ts.getTime(), hi=lo;
+  for(const e of FILTERED){ const t=e.ts.getTime(); if(t<lo)lo=t; if(t>hi)hi=t; }
+  TS.minTs=lo; TS.maxTs=hi;
+  if(F.tsCenter==null) F.tsCenter=(lo+hi)/2;
+  F.tsCenter=clampCenter(F.tsCenter);
 }
-function buildGraph(){
-  const {type,value}=graphCenter();
-  GRAPH.nodes=[]; GRAPH.edges=[];
-  if(!value){ GRAPH.pos.clear(); return; }
-  const field=type==='user'?'user':type==='obj'?'obj':'ip';
-  const evs=EVENTS.filter(e=>e[field]===value);
-  const groups = type==='user' ? [['ip','ip'],['obj','obj'],['op','op'],['wl','wl']]
-               : type==='obj'  ? [['user','user'],['ip','ip'],['op','op'],['site','site']]
-               :                 [['user','user'],['obj','obj'],['op','op']];
-  const satMap=new Map();
-  evs.forEach(e=>{ groups.forEach(gp=>{ const gt=gp[0], f=gp[1], val=e[f]; if(!val||val===value)return;
-    const key=gt+' '+val; let s=satMap.get(key);
-    if(!s){ s={gtype:gt, val:String(val), count:0, maxRisk:'info'}; satMap.set(key,s); }
-    s.count++; if(GRISKORD[e.risk]>GRISKORD[s.maxRisk]) s.maxRisk=e.risk; }); });
-  const byGroup={}; satMap.forEach(s=>{ (byGroup[s.gtype]||(byGroup[s.gtype]=[])).push(s); });
-  GRAPH.nodes.push({id:GID_CENTER, gtype:type, val:value, kind:'center', label:(type==='obj'?shortObj(value):value)});
-  Object.keys(byGroup).forEach(gt=>{
-    const arr=byGroup[gt].sort((a,b)=>b.count-a.count);
-    const cap=(F.graphTopN||10)+(GRAPH.expand[gt]||0);
-    arr.slice(0,cap).forEach(s=>{ const id=gt+' '+s.val;
-      GRAPH.nodes.push({id, gtype:gt, val:s.val, kind:'sat', label:(gt==='obj'?shortObj(s.val):s.val), count:s.count, maxRisk:s.maxRisk});
-      GRAPH.edges.push({a:GID_CENTER, b:id, weight:s.count, risk:s.maxRisk}); });
-    if(arr.length>cap){ const id=' more '+gt;
-      GRAPH.nodes.push({id, gtype:gt, kind:'more', more:arr.length-cap, label:'+'+(arr.length-cap)+' more '+gt});
-      GRAPH.edges.push({a:GID_CENTER, b:id, weight:1, risk:'info', more:true}); }
+function tsComputeLanes(){ // one lane per workload present, busiest at top, compressed to fit
+  const c={}; for(const e of FILTERED){ const w=e.wl||'(none)'; c[w]=(c[w]||0)+1; }
+  const wls=Object.keys(c).sort((a,b)=>c[b]-c[a]);
+  const usable=Math.max(40, TS.h-TS_AXIS_H), n=Math.max(1,wls.length), laneH=usable/n;
+  TS.lanes=wls.map((w,i)=>{ const y0=i*laneH, y1=y0+laneH; return {wl:w, color:wlColor(w), y0, y1, cy:(y0+y1)/2, count:c[w]}; });
+  TS.laneOf={}; TS.lanes.forEach(l=>{ TS.laneOf[l.wl]=l; });
+}
+function tsSize(){
+  const wrap=document.getElementById('ts-wrap'); if(!wrap||!TS.canvas)return;
+  TS.dpr=window.devicePixelRatio||1;
+  const orc=TS.over.getBoundingClientRect(), crc=TS.canvas.getBoundingClientRect();
+  TS.ow=orc.width; TS.oh=orc.height; TS.w=crc.width; TS.h=crc.height;
+  [[TS.over,TS.octx,TS.ow,TS.oh],[TS.canvas,TS.ctx,TS.w,TS.h]].forEach(a=>{ const cv=a[0],ct=a[1],w=a[2],h=a[3];
+    cv.width=Math.round(w*TS.dpr); cv.height=Math.round(h*TS.dpr);
+    cv.style.width=w+'px'; cv.style.height=h+'px'; ct.setTransform(TS.dpr,0,0,TS.dpr,0,0); });
+}
+function tsNiceStep(spanSec){ const cands=[1,2,5,10,15,30,60]; const target=spanSec/7;
+  for(const c of cands) if(c>=target) return c; return 60; }
+function tsDrawTicks(ctx,ay){
+  const stepMs=tsNiceStep(F.tsWin)*1000, half=tsHalf(), lo=F.tsCenter-half, hi=F.tsCenter+half;
+  const first=Math.ceil(lo/stepMs)*stepMs;
+  ctx.fillStyle='#6b7688'; ctx.font='10px ui-monospace,monospace'; ctx.textBaseline='top'; ctx.textAlign='center';
+  for(let t=first;t<=hi;t+=stepMs){ const x=tsX(t);
+    ctx.strokeStyle='#222c3a'; ctx.beginPath(); ctx.moveTo(x,ay); ctx.lineTo(x,ay+5); ctx.stroke();
+    ctx.fillText(fmtTime(new Date(t)), x, ay+7); }
+  ctx.textAlign='left';
+}
+function tsDrawFine(){
+  const ctx=TS.ctx, w=TS.w, h=TS.h; ctx.clearRect(0,0,w,h); TS.marks=[];
+  if(!FILTERED.length){ ctx.fillStyle='#6b7688'; ctx.font='13px -apple-system,system-ui,sans-serif';
+    ctx.textAlign='center'; ctx.textBaseline='middle';
+    ctx.fillText('No events match the current filters.', w/2, h/2); ctx.textAlign='left'; return; }
+  // lane bands + labels + left colour tab
+  TS.lanes.forEach((l,i)=>{
+    ctx.fillStyle=(i%2)?'rgba(255,255,255,.015)':'rgba(255,255,255,.035)'; ctx.fillRect(0,l.y0,w,l.y1-l.y0);
+    ctx.fillStyle=l.color; ctx.fillRect(0,l.y0,3,l.y1-l.y0);
+    ctx.font='11px -apple-system,system-ui,sans-serif'; ctx.textBaseline='middle'; ctx.globalAlpha=.9;
+    ctx.fillText(l.wl, 8, l.cy); ctx.globalAlpha=1;
   });
-  seedGraphPositions();
+  // axis baseline + ticks
+  const ay=h-TS_AXIS_H;
+  ctx.strokeStyle='#222c3a'; ctx.beginPath(); ctx.moveTo(0,ay); ctx.lineTo(w,ay); ctx.stroke();
+  tsDrawTicks(ctx,ay);
+  // playhead at centre
+  ctx.strokeStyle='#4aa3ff'; ctx.lineWidth=1.5; ctx.beginPath(); ctx.moveTo(w/2,0); ctx.lineTo(w/2,ay); ctx.stroke(); ctx.lineWidth=1;
+  // marks within the window
+  const half=tsHalf(), lo=F.tsCenter-half, hi=F.tsCenter+half;
+  for(let i=0;i<FILTERED.length;i++){ const e=FILTERED[i], t=e.ts.getTime();
+    if(t<lo||t>hi) continue;
+    const lane=TS.laneOf[e.wl||'(none)']; if(!lane) continue;
+    const x=tsX(t);
+    const jitter=lane.count>1?(((i*2654435761)%7)-3)*2:0;   // keep stacked dots clickable
+    const y=Math.max(lane.y0+TS_DOT_R, Math.min(lane.y1-TS_DOT_R, lane.cy+jitter));
+    const sel=(i===selectedIdx), r=sel?TS_DOT_R+2:TS_DOT_R;
+    ctx.beginPath(); ctx.arc(x,y,r,0,6.2832); ctx.fillStyle=riskHex(e.risk); ctx.fill();
+    if(sel){ ctx.lineWidth=2; ctx.strokeStyle='#fff'; ctx.stroke(); ctx.lineWidth=1; }
+    TS.marks.push({fidx:i, x, y, r});
+  }
 }
-function seedGraphPositions(){
-  const cx=GRAPH.w/2||300, cy=GRAPH.h/2||300, R=Math.min(cx,cy)*0.62;
-  const ids=new Set(GRAPH.nodes.map(n=>n.id));
-  GRAPH.pos.forEach((_,k)=>{ if(!ids.has(k)) GRAPH.pos.delete(k); });
-  const sats=GRAPH.nodes.filter(n=>n.kind!=='center');
-  GRAPH.nodes.forEach(n=>{ if(!GRAPH.pos.has(n.id)) GRAPH.pos.set(n.id,{x:0,y:0,vx:0,vy:0,pinned:false}); });
-  const c=GRAPH.pos.get(GID_CENTER); if(c){ c.x=cx; c.y=cy; c.vx=c.vy=0; c.pinned=true; }
-  let i=0; sats.forEach(n=>{ const p=GRAPH.pos.get(n.id);
-    if(!p.x&&!p.y){ const a=(i/Math.max(1,sats.length))*Math.PI*2; p.x=cx+Math.cos(a)*R; p.y=cy+Math.sin(a)*R; } i++; });
+function tsDrawOverview(){
+  const ctx=TS.octx, w=TS.ow, h=TS.oh; ctx.clearRect(0,0,w,h);
+  if(!FILTERED.length) return;
+  const BINS=Math.max(40,Math.floor(w/3)), span=(TS.maxTs-TS.minTs)||1, bins=new Array(BINS).fill(0);
+  for(const e of FILTERED){ let b=Math.floor((e.ts.getTime()-TS.minTs)/span*(BINS-1)); if(b<0)b=0; if(b>=BINS)b=BINS-1; bins[b]++; }
+  let mx=1; for(const v of bins) if(v>mx) mx=v;
+  const bw=w/BINS;
+  ctx.fillStyle='rgba(74,163,255,.35)';
+  for(let b=0;b<BINS;b++){ if(!bins[b])continue; const bh=(bins[b]/mx)*(h-8); ctx.fillRect(b*bw, h-bh-2, Math.max(1,bw), bh); }
+  // window box
+  const half=tsHalf(); let x0=Math.max(0,tsOverX(F.tsCenter-half)), x1=Math.min(w,tsOverX(F.tsCenter+half));
+  ctx.fillStyle='rgba(74,163,255,.14)'; ctx.fillRect(x0,0,Math.max(2,x1-x0),h);
+  ctx.strokeStyle='#4aa3ff'; ctx.strokeRect(x0+.5,.5,Math.max(2,x1-x0)-1,h-1);
+  // centre tick
+  const cx=tsOverX(F.tsCenter); ctx.strokeStyle='#fff'; ctx.beginPath(); ctx.moveTo(cx,0); ctx.lineTo(cx,h); ctx.stroke();
 }
-function graphTick(){
-  const nodes=GRAPH.nodes, pos=GRAPH.pos, cx=GRAPH.w/2, cy=GRAPH.h/2;
-  const REP=7000, SPRING=0.025, CENTERF=0.004, DAMP=0.86;
-  for(let i=0;i<nodes.length;i++){ const a=pos.get(nodes[i].id); if(!a)continue;
-    for(let j=i+1;j<nodes.length;j++){ const b=pos.get(nodes[j].id); if(!b)continue;
-      let dx=a.x-b.x, dy=a.y-b.y, d2=dx*dx+dy*dy; if(d2<1)d2=1; const d=Math.sqrt(d2), f=REP/d2;
-      const fx=f*dx/d, fy=f*dy/d; if(!a.pinned){a.vx+=fx;a.vy+=fy;} if(!b.pinned){b.vx-=fx;b.vy-=fy;} } }
-  GRAPH.edges.forEach(e=>{ const a=pos.get(e.a), b=pos.get(e.b); if(!a||!b)return;
-    let dx=b.x-a.x, dy=b.y-a.y, d=Math.sqrt(dx*dx+dy*dy)||0.01;
-    const rest=90+140/Math.sqrt(e.weight||1), f=SPRING*(d-rest), fx=f*dx/d, fy=f*dy/d;
-    if(!a.pinned){a.vx+=fx;a.vy+=fy;} if(!b.pinned){b.vx-=fx;b.vy-=fy;} });
-  let ke=0;
-  nodes.forEach(n=>{ const p=pos.get(n.id); if(!p||p.pinned)return;
-    p.vx+=(cx-p.x)*CENTERF; p.vy+=(cy-p.y)*CENTERF; p.vx*=DAMP; p.vy*=DAMP; p.x+=p.vx; p.y+=p.vy; ke+=p.vx*p.vx+p.vy*p.vy; });
-  return ke;
+function tsUpdateReadout(){ const el=document.getElementById('ts-centre');
+  if(el) el.textContent=(FILTERED.length&&F.tsCenter!=null)?fmtFull(new Date(F.tsCenter)):'—'; }
+function renderTimeSlice(){
+  if(F.tab!=='timeline' || !TS.ctx) return;
+  tsBounds(); tsComputeLanes(); tsDrawFine(); tsDrawOverview(); tsUpdateReadout();
 }
-function startGraphSim(){ if(GRAPH.running)return; GRAPH.running=true; loopGraph(); }
-function stopGraphSim(){ GRAPH.running=false; if(GRAPH.raf)cancelAnimationFrame(GRAPH.raf); GRAPH.raf=0; }
-function loopGraph(){ if(!GRAPH.running)return; let ke=0; for(let s=0;s<2;s++) ke=graphTick(); drawGraph();
-  if(ke<0.08 && !GRAPH.drag){ GRAPH.running=false; GRAPH.raf=0; return; } GRAPH.raf=requestAnimationFrame(loopGraph); }
-function truncLabel(s){ s=String(s); return s.length>34?s.slice(0,33)+'…':s; }
-function drawGraph(){
-  if(!gctx)return; const ctx=gctx; ctx.clearRect(0,0,GRAPH.w,GRAPH.h);
-  GRAPH.edges.forEach(e=>{ const a=GRAPH.pos.get(e.a), b=GRAPH.pos.get(e.b); if(!a||!b)return;
-    const hot=GRAPH.hoverEdge===e;
-    ctx.lineWidth=e.more?1:Math.min(6,1+Math.log2(e.weight+1));
-    ctx.strokeStyle=e.more?'rgba(255,255,255,.14)':(hot?'#ffffff':GEDGE_COLOR[e.risk]||'#5b6678');
-    ctx.beginPath(); ctx.moveTo(a.x,a.y); ctx.lineTo(b.x,b.y); ctx.stroke(); });
-  GRAPH.nodes.forEach(n=>{ const p=GRAPH.pos.get(n.id); if(!p)return;
-    const isC=n.kind==='center', isMore=n.kind==='more';
-    const r=isC?15:isMore?7:Math.min(13,6+Math.log2((n.count||1)+1));
-    ctx.beginPath(); ctx.arc(p.x,p.y,r,0,6.2832); ctx.fillStyle=isMore?'#2a3547':gtypeColor(n.gtype,n.val); ctx.fill();
-    if(isC){ ctx.lineWidth=2.5; ctx.strokeStyle='#fff'; ctx.stroke(); }
-    else if(GRAPH.hover===n){ ctx.lineWidth=2; ctx.strokeStyle='#fff'; ctx.stroke(); }
-    else if(p.pinned){ ctx.lineWidth=1.5; ctx.strokeStyle='rgba(255,255,255,.6)'; ctx.stroke(); }
-    ctx.font=isC?'600 12px '+'-apple-system,system-ui,sans-serif':'11px -apple-system,system-ui,sans-serif';
-    ctx.fillStyle=isC?'#fff':'#cfd8e6'; ctx.textBaseline='middle';
-    ctx.fillText(truncLabel(n.label||''), p.x+r+4, p.y); });
+function tsLocal(cv,ev){ const r=cv.getBoundingClientRect(); return {x:ev.clientX-r.left, y:ev.clientY-r.top}; }
+function tsHitMark(x,y){ let best=null,bd=1e9;
+  for(const m of TS.marks){ const dx=x-m.x,dy=y-m.y,d=dx*dx+dy*dy, rr=(m.r+4)*(m.r+4); if(d<rr&&d<bd){bd=d;best=m;} }
+  return best; }
+function onTsDown(ev){ if(!FILTERED.length)return; const m=tsLocal(TS.canvas,ev);
+  TS.drag={kind:'fine', sx:m.x, sCenter:F.tsCenter, moved:false}; TS.canvas.classList.add('scrubbing'); }
+function onTsMove(ev){ const m=tsLocal(TS.canvas,ev);
+  if(TS.drag&&TS.drag.kind==='fine'){ const dxPx=m.x-TS.drag.sx; if(Math.abs(dxPx)>3) TS.drag.moved=true;
+    const msPerPx=(F.tsWin*1000)/TS.w;
+    F.tsCenter=clampCenter(TS.drag.sCenter - dxPx*msPerPx);   // drag right reveals earlier events
+    renderTimeSlice(); return; }
+  if(TS.marks.length){ const hit=tsHitMark(m.x,m.y); TS.canvas.style.cursor=hit?'pointer':'grab'; }
 }
-function sizeGraphCanvas(){ const wrap=document.getElementById('graph-wrap'); if(!wrap||!gcanvas)return;
-  const rc=wrap.getBoundingClientRect(), dpr=window.devicePixelRatio||1;
-  GRAPH.w=rc.width; GRAPH.h=rc.height;
-  gcanvas.width=Math.round(rc.width*dpr); gcanvas.height=Math.round(rc.height*dpr);
-  gcanvas.style.width=rc.width+'px'; gcanvas.style.height=rc.height+'px';
-  gctx.setTransform(dpr,0,0,dpr,0,0); }
-function gMouse(ev){ const rc=gcanvas.getBoundingClientRect(); return {x:ev.clientX-rc.left, y:ev.clientY-rc.top}; }
-function graphHitNode(x,y){ let best=null,bd=1e9;
-  GRAPH.nodes.forEach(n=>{ const p=GRAPH.pos.get(n.id); if(!p)return; const r=(n.kind==='center'?15:n.kind==='more'?8:11)+5;
-    const dx=x-p.x,dy=y-p.y,d=dx*dx+dy*dy; if(d<r*r&&d<bd){bd=d;best=n;} }); return best; }
-function distSeg(px,py,x1,y1,x2,y2){ const dx=x2-x1,dy=y2-y1,l2=dx*dx+dy*dy||1; let t=((px-x1)*dx+(py-y1)*dy)/l2; t=Math.max(0,Math.min(1,t)); return Math.hypot(px-(x1+t*dx),py-(y1+t*dy)); }
-function graphHitEdge(x,y){ let best=null,bd=7;
-  GRAPH.edges.forEach(e=>{ const a=GRAPH.pos.get(e.a),b=GRAPH.pos.get(e.b); if(!a||!b)return; const d=distSeg(x,y,a.x,a.y,b.x,b.y); if(d<bd){bd=d;best=e;} }); return best; }
-function updateGraphHUD(n,e,ev){ const hud=document.getElementById('ghud'); if(!hud)return; let t='';
-  if(n&&n.kind==='sat') t=n.gtype+': '+n.label+' · '+n.count+' event'+(n.count===1?'':'s')+(n.maxRisk&&n.maxRisk!=='info'?' · '+n.maxRisk+'-risk':'');
-  else if(n&&n.kind==='center') t='centre · '+n.label;
-  else if(n&&n.kind==='more') t='click to expand '+n.more+' more';
-  else if(e){ const s=GRAPH.nodes.find(x=>x.id===e.b); t=(s?s.label:'')+' · '+e.weight+' event'+(e.weight===1?'':'s')+' · click to scope timeline'; }
-  if(!t){ hud.style.display='none'; return; }
-  hud.textContent=t; hud.style.display='block';
-  const rc=gcanvas.getBoundingClientRect(); let lx=ev.clientX-rc.left+13, ty=ev.clientY-rc.top+13;
-  hud.style.left=Math.min(lx,GRAPH.w-hud.offsetWidth-6)+'px'; hud.style.top=Math.min(ty,GRAPH.h-28)+'px'; }
-function onGraphMove(ev){ const m=gMouse(ev);
-  if(GRAPH.drag){ const p=GRAPH.pos.get(GRAPH.drag.id); if(p){p.x=m.x;p.y=m.y;p.vx=p.vy=0;} GRAPH.drag.moved=GRAPH.drag.moved||Math.hypot(m.x-GRAPH.drag.dx,m.y-GRAPH.drag.dy)>4; startGraphSim(); return; }
-  const n=graphHitNode(m.x,m.y), e=n?null:graphHitEdge(m.x,m.y);
-  if(n!==GRAPH.hover||e!==GRAPH.hoverEdge){ GRAPH.hover=n; GRAPH.hoverEdge=e; if(!GRAPH.running)drawGraph(); }
-  updateGraphHUD(n,e,ev); gcanvas.style.cursor=(n||e)?'pointer':'default'; }
-function onGraphDown(ev){ const m=gMouse(ev); const n=graphHitNode(m.x,m.y);
-  if(n){ GRAPH.drag={id:n.id, node:n, moved:false, dx:m.x, dy:m.y}; if(n.kind!=='center'){ const p=GRAPH.pos.get(n.id); if(p)p.pinned=true; } } }
-function onGraphUp(ev){ if(GRAPH.drag){ const d=GRAPH.drag; GRAPH.drag=null;
-    if(!d.moved){ onGraphClickNode(d.node); } return; }
-  const m=gMouse(ev); const e=graphHitEdge(m.x,m.y); if(e) onGraphClickEdge(e); }
-function onGraphCtx(ev){ ev.preventDefault(); const m=gMouse(ev); const n=graphHitNode(m.x,m.y);
-  if(n&&n.kind!=='center'){ const p=GRAPH.pos.get(n.id); if(p){ p.pinned=!p.pinned; drawGraph(); } } }
-function onGraphClickNode(n){
-  if(n.kind==='more'){ GRAPH.expand[n.gtype]=(GRAPH.expand[n.gtype]||0)+(F.graphTopN||10); buildGraph(); startGraphSim(); return; }
-  if(n.kind==='center') return;
-  if(n.gtype==='user'||n.gtype==='obj'||n.gtype==='ip') recenterGraph(n.gtype,n.val);
-  else scopeTimelineToSat(n); }
-function onGraphClickEdge(e){ const s=GRAPH.nodes.find(x=>x.id===e.b); if(s) scopeTimelineToSat(s); }
-function recenterGraph(type,val){ F.graphType=type; F.graphValue=val; GRAPH.expand={};
-  if(type==='user')F.user=val; else if(type==='obj')F.obj=val; else if(type==='ip')F.ipsel=val;
-  syncGraphControls(); buildGraph(); startGraphSim(); }
-function scopeTimelineToSat(n){ const c=graphCenter();
-  if(c.type==='user'){ setTab('user'); F.user=c.value; document.getElementById('userselect').value=c.value; }
-  else if(c.type==='obj'){ setTab('file'); selectObject(c.value); }
-  else if(c.type==='ip'){ setTab('ip'); selectIp(c.value); document.getElementById('ipselect').value=c.value; }
-  if(n.kind==='sat'){ document.getElementById('search').value=n.val; F.q=n.val; }
-  applyFilters(); }
-function populateGraphValues(type){ const sel=document.getElementById('gvalue'); if(!sel)return; let items=[];
-  if(type==='obj'){ if(!OBJINDEX)buildObjIndex(); items=OBJINDEX.slice(0,500).map(o=>[o.obj,o.count]); }
-  else { const f=type==='ip'?'ip':'user', c={}; EVENTS.forEach(e=>{const v=e[f]; if(v)c[v]=(c[v]||0)+1;});
-    items=Object.keys(c).sort((a,b)=>c[b]-c[a]).map(v=>[v,c[v]]); }
-  sel.innerHTML=items.map(it=>'<option value="'+esc(it[0])+'">'+esc(type==='obj'?shortObj(it[0]):it[0])+' ('+it[1]+')</option>').join(''); }
-function renderGraphLegend(){ const el=document.getElementById('glegend'); if(!el)return;
-  el.innerHTML=[['user','user'],['ip','IP'],['obj','object'],['op','operation']].map(it=>'<span class="gl"><i style="background:'+GTYPE_COLOR[it[0]]+'"></i>'+it[1]+'</span>').join('')
-    +'<span class="gl"><i style="background:#ff5d5d;width:14px;height:3px;border-radius:1px"></i>high-risk edge</span>'; }
-function syncGraphControls(){ const c=graphCenter();
-  document.querySelectorAll('#gtypeseg button').forEach(b=>b.classList.toggle('on',b.dataset.gt===c.type));
-  populateGraphValues(c.type); const sel=document.getElementById('gvalue'); if(sel)sel.value=c.value; renderGraphLegend(); }
-function enterGraph(){
-  if(!gcanvas){ gcanvas=document.getElementById('gcanvas'); gctx=gcanvas.getContext('2d'); }
-  if(!gWired){ gWired=true;
-    gcanvas.addEventListener('mousemove',onGraphMove); gcanvas.addEventListener('mousedown',onGraphDown);
-    window.addEventListener('mouseup',onGraphUp); gcanvas.addEventListener('contextmenu',onGraphCtx);
-    gcanvas.addEventListener('mouseleave',()=>{ GRAPH.hover=null; GRAPH.hoverEdge=null; const h=document.getElementById('ghud'); if(h)h.style.display='none'; if(!GRAPH.running)drawGraph(); });
-    if(window.ResizeObserver) new ResizeObserver(()=>{ if(F.tab==='graph'){ sizeGraphCanvas(); seedGraphPositions(); startGraphSim(); } }).observe(document.getElementById('graph-wrap')); }
-  graphCenter(); syncGraphControls(); sizeGraphCanvas(); buildGraph(); startGraphSim();
+function onTsUp(ev){ if(!(TS.drag&&TS.drag.kind==='fine'))return; const d=TS.drag; TS.drag=null;
+  TS.canvas.classList.remove('scrubbing');
+  if(!d.moved){ const m=tsLocal(TS.canvas,ev), hit=tsHitMark(m.x,m.y);
+    if(hit){ selectedIdx=hit.fidx; renderTimeSlice(); renderDetail(); } }
+}
+function onOverDown(ev){ if(!FILTERED.length)return; const m=tsLocal(TS.over,ev), half=tsHalf();
+  const x0=tsOverX(F.tsCenter-half), x1=tsOverX(F.tsCenter+half);
+  if(m.x>=x0&&m.x<=x1){ TS.drag={kind:'over', sx:m.x, sCenter:F.tsCenter}; }
+  else { F.tsCenter=clampCenter(tsOverXinv(m.x)); renderTimeSlice(); }
+}
+function onOverMove(ev){ if(!(TS.drag&&TS.drag.kind==='over'))return; const m=tsLocal(TS.over,ev);
+  const span=(TS.maxTs-TS.minTs)||1, dms=((m.x-TS.drag.sx)/TS.ow)*span;
+  F.tsCenter=clampCenter(TS.drag.sCenter+dms); renderTimeSlice();
+}
+function tsRenderLegend(){ const el=document.getElementById('ts-legend'); if(!el)return;
+  el.innerHTML=[['high','#ff5d5d'],['med','#f0a830'],['low','#4aa3ff'],['info','#8a93a6']]
+    .map(it=>'<span class="tl"><i style="background:'+it[1]+'"></i>'+it[0]+'</span>').join(''); }
+function enterTimeSlice(){
+  if(!TS.canvas){ TS.canvas=document.getElementById('tscanvas'); TS.ctx=TS.canvas.getContext('2d');
+    TS.over=document.getElementById('tsover'); TS.octx=TS.over.getContext('2d'); }
+  if(!TS.wired){ TS.wired=true;
+    TS.canvas.addEventListener('mousedown',onTsDown);
+    TS.over.addEventListener('mousedown',onOverDown);
+    window.addEventListener('mousemove',e=>{ if(F.tab!=='timeline')return;
+      if(TS.drag&&TS.drag.kind==='over') onOverMove(e); else onTsMove(e); });
+    window.addEventListener('mouseup',e=>{ if(F.tab!=='timeline')return;
+      if(TS.drag&&TS.drag.kind==='fine') onTsUp(e); else TS.drag=null; });
+    if(window.ResizeObserver) new ResizeObserver(()=>{ if(F.tab==='timeline'){ tsSize(); renderTimeSlice(); } }).observe(document.getElementById('ts-wrap'));
+    tsRenderLegend();
+  }
+  tsSize(); renderTimeSlice();
 }
 
 /* ---------- tabs ---------- */
@@ -1672,10 +1656,10 @@ function setTab(t){
   document.getElementById('pivot-user').classList.toggle('on',t==='user');
   document.getElementById('pivot-file').classList.toggle('on',t==='file');
   document.getElementById('pivot-ip').classList.toggle('on',t==='ip');
-  document.getElementById('pivot-graph').classList.toggle('on',t==='graph');
-  document.querySelector('.body').classList.toggle('graph-on',t==='graph');
+  document.getElementById('pivot-timeline').classList.toggle('on',t==='timeline');
+  document.querySelector('.body').classList.toggle('timeline-on',t==='timeline');
   if(t==='file' && !OBJINDEX){ buildObjIndex(); renderObjList(); }
-  if(t==='graph') enterGraph(); else stopGraphSim();
+  if(t==='timeline') enterTimeSlice();
 }
 
 /* ---------- wire up ---------- */
@@ -1713,21 +1697,13 @@ document.getElementById('ipwindow').onchange=e=>{ F.ipwin=parseInt(e.target.valu
 document.getElementById('objsearch').oninput=()=>renderObjList();
 document.getElementById('objclear').onclick=()=>{F.obj=null;document.getElementById('objclear').style.display='none';
   renderObjList();renderObjSummary();applyFilters();};
-// graph controls
-document.getElementById('gtypeseg').onclick=e=>{ if(e.target.dataset.gt){
-  F.graphType=e.target.dataset.gt; F.graphValue=''; GRAPH.expand={};
-  document.querySelectorAll('#gtypeseg button').forEach(b=>b.classList.toggle('on',b===e.target));
-  populateGraphValues(F.graphType);
-  const sel=document.getElementById('gvalue'); F.graphValue=sel.value||''; renderGraphLegend();
-  buildGraph(); startGraphSim();
+// time-slice controls
+document.getElementById('tswinseg').onclick=e=>{ if(e.target.dataset.win){
+  F.tsWin=parseInt(e.target.dataset.win,10)||10;
+  document.querySelectorAll('#tswinseg button').forEach(b=>b.classList.toggle('on',b===e.target));
+  renderTimeSlice();
 }};
-document.getElementById('gvalue').onchange=e=>{ F.graphValue=e.target.value; GRAPH.expand={};
-  if(F.graphType==='user')F.user=e.target.value; else if(F.graphType==='obj')F.obj=e.target.value; else if(F.graphType==='ip')F.ipsel=e.target.value;
-  buildGraph(); startGraphSim(); };
-document.getElementById('gtopn').onchange=e=>{ F.graphTopN=parseInt(e.target.value,10)||10; GRAPH.expand={};
-  try{ localStorage.setItem('ual-viewer-graph-topn', F.graphTopN); }catch(_){} buildGraph(); startGraphSim(); };
-try{ const gt=parseInt(localStorage.getItem('ual-viewer-graph-topn'),10); if(gt){ F.graphTopN=gt; document.getElementById('gtopn').value=String(gt); } }catch(_){}
-document.getElementById('gfit').onclick=()=>{ GRAPH.pos.clear(); sizeGraphCanvas(); seedGraphPositions(); startGraphSim(); };
+document.getElementById('ts-fit').onclick=()=>{ if(TS.minTs){ F.tsCenter=(TS.minTs+TS.maxTs)/2; renderTimeSlice(); } };
 document.getElementById('btn-add').onclick=()=>fileInput.click();
 document.getElementById('btn-export').onclick=exportCSV;
 /* ---------- collapsible side panels (detail + raw, independent) ---------- */
@@ -1808,8 +1784,8 @@ try{ if(localStorage.getItem('ual-viewer-raw-collapsed')==='1') setPanel('raw',t
 })();
 
 document.getElementById('btn-reset').onclick=()=>{
-  stopGraphSim(); GRAPH.nodes=[];GRAPH.edges=[];GRAPH.pos.clear();GRAPH.expand={};GRAPH.hover=null;GRAPH.hoverEdge=null;
-  F.graphType='';F.graphValue='';
+  F.tsCenter=null; F.tsWin=10; TS.drag=null;
+  document.querySelectorAll('#tswinseg button').forEach(b=>b.classList.toggle('on',b.dataset.win==='10'));
   EVENTS=[];FILTERED=[];FILES=0;OBJINDEX=null;F.user='';F.obj=null;F.q='';F.risks.clear();F.wls.clear();
   F.from=F.to=null;F.highonly=false;F.ipsel='';F.ipwin=1440;IPSWITCH=null;IPUSERS=null;
   document.getElementById('app').style.display='none';

@@ -590,7 +590,7 @@ const F={ q:'', tz:'utc', from:null, to:null, highonly:false, sort:'asc',
           risks:new Set(), wls:new Set(), tab:'user', user:'', obj:null, ipsel:'', ipwin:1440 };
 let IPSWITCH=null;     // Map(eventRef -> {prevUser, gap}) for the selected IP
 const SECCOLLAPSE={};  // collapsed state of detail sub-sections (per-workload + oauth)
-try{ ['oauth','teams','exchange','sharepoint','aad','yammer','endpoint','publicendpoint'].forEach(k=>{ if(localStorage.getItem('ual-viewer-sec-'+k)==='1') SECCOLLAPSE[k]=true; }); }catch(e){}
+try{ ['oauth','teams','exchange','sharepoint','aad','yammer','endpoint','mip','dlp'].forEach(k=>{ if(localStorage.getItem('ual-viewer-sec-'+k)==='1') SECCOLLAPSE[k]=true; }); }catch(e){}
 let selectedIdx=-1;   // index into FILTERED
 let rowItems=[];      // {type:'day'|'ev', ...} virtual list
 let ROWOF=[];         // ROWOF[fidx] = index of that event's row within rowItems (for scroll-into-view)
@@ -1059,14 +1059,17 @@ function fmtBytes(n){ n=parseInt(n,10); if(!n||isNaN(n))return''; if(n<1024)retu
 
 // dispatch a selected event to its workload section
 function renderWorkloadSection(e){
-  if(isTeamsEvent(e)) return renderTeamsSection(e);
   const wl=e.wl||'', rt=parseInt(e.rt,10)||0;
-  if(wl==='Exchange' || rt===1||rt===2||rt===3||rt===19||rt===50) return renderExchangeSection(e);
+  // MIP sensitivity-label client events (Workload "PublicEndpoint", RT 83/84) — check first
+  if(rt===83||rt===84 || wl==='PublicEndpoint') return renderMIPLabelSection(e);
+  // Compliance DLP / auto-label policy matches (RT 11/13) — before the Exchange/SharePoint routing
+  if(rt===11||rt===13) return renderDLPSection(e);
+  if(isTeamsEvent(e)) return renderTeamsSection(e);
+  if(wl==='Exchange' || rt===1||rt===2||rt===3||rt===19||rt===50||rt===51) return renderExchangeSection(e);
   if(wl==='SharePoint'||wl==='OneDrive' || rt===4||rt===6||rt===7||rt===14||rt===36||rt===54) return renderSharePointSection(e);
   if(wl==='AzureActiveDirectory' || rt===8||rt===9) return renderAADSection(e);
   if(wl==='Yammer'||wl==='VivaEngage' || rt===22||rt===374||rt===414||rt===422) return renderYammerSection(e);
   if(wl==='Endpoint' || rt===63) return renderEndpointSection(e);
-  if(wl==='PublicEndpoint') return renderPublicEndpointSection(e);
   return '';
 }
 
@@ -1242,21 +1245,84 @@ function renderEndpointSection(e){
   return dsec('endpoint','Endpoint DLP', rows, lead, wlColor('Endpoint'));
 }
 
-/* PublicEndpoint — undocumented; best evidence = Purview Network DLP (web/cloud/AI egress) */
-function renderPublicEndpointSection(e){
+// list of email recipients with per-address external flagging
+function recipientList(emails, actorDom){
+  emails=(emails||[]).filter(Boolean); let ext=0;
+  const html=emails.slice(0,30).map(a=>{ const d=emailDomain(a); const isE=d&&actorDom&&d!==actorDom; if(isE)ext++;
+    return '<div class="tpart'+(isE?' ext':'')+'"><span class="tpn" title="'+esc(a)+'">'+esc(a)+'</span>'+(isE?'<span class="tdom">('+esc(d)+')</span>':'')+'</div>'; }).join('');
+  return { html:'<div class="tparts">'+html+(emails.length>30?'<div class="tpart">… '+(emails.length-30)+' more</div>':'')+'</div>', ext:ext, n:emails.length };
+}
+
+/* MIP sensitivity-label client events — RT 83 (SensitivityLabelAction) / 84 (SensitivityLabeledFileAction).
+   These carry Workload "PublicEndpoint" (label applied/updated/file-opened in Office apps). */
+const MIP_ACTIONSRC={0:'default',1:'manual',2:'automatic',3:'recommended',4:'mandatory'};
+function renderMIPLabelSection(e){
   const ad=e.raw; if(!ad||typeof ad!=='object') return '';
   const g=function(){ return adGet.apply(null,[ad].concat([].slice.call(arguments))); };
-  let rows='';
+  let rows='',lead='';
   const kv=(k,h)=>{ if(h!==undefined&&h!==null&&h!=='') rows+='<div class="k">'+esc(k)+'</div><div class="v">'+h+'</div>'; };
-  const lead=flagRow('<span class="tnote">likely Purview Network DLP — web/cloud/AI egress (workload not officially documented; verify in raw)</span>');
-  const dest=g('TargetDomain','FullUrl','DestinationUrl','TargetUrl','Url'); if(dest) kv('Destination', esc(String(dest)));
-  const app=g('CloudAppName','ApplicationName','DestinationApp','TargetApp'); if(app) kv('App', wchip(app,'warn'));
-  const sit=asArr(g('SensitiveInfoTypeData'))||asArr(g('InfoTypes'))||[];
-  if(sit.length){ const names=sit.map(s=>s&&(s.SensitiveInformationTypeName||s.DN||s.Name)).filter(Boolean); if(names.length) kv('Sensitive info', names.slice(0,6).map(n=>wchip(n,'warn')).join(' ')); }
-  const dev=g('DeviceName'); if(dev) kv('Device', esc(dev));
-  let pol=g('PolicyName'); const pd=asArr(g('PolicyDetails')); if(!pol&&pd&&pd[0]) pol=pd[0].PolicyName; if(pol) kv('Policy', esc(String(pol)));
-  const enf=g('EnforcementMode'); if(enf!==undefined) kv('Enforcement', wchip(String(enf)==='1'?'Audit':String(enf)==='0'?'Off':String(enf)));
-  return dsec('publicendpoint','Network egress (PublicEndpoint)', rows, lead, wlColor('PublicEndpoint'));
+  const actorDom=emailDomain(e.user);
+  const sled=g('SensitivityLabelEventData')||{};
+  const cur=g('CurrentProtectionType')||{}, prev=g('PreviousProtectionType')||{};
+  const oldLbl=sled.OldSensitivityLabelId, newLbl=sled.SensitivityLabelId||g('LabelId');
+  const email=g('EmailInfo')||{};
+  const rcpts=[].concat(email.to||[],email.cc||[]);
+  let extR=0; rcpts.forEach(a=>{ const d=emailDomain(a); if(d&&actorDom&&d!==actorDom)extR++; });
+  const flags=[];
+  if(oldLbl&&newLbl&&oldLbl!==newLbl) flags.push(wchip('⚠ label changed','warn'));
+  if(prev.documentEncrypted===true&&cur.documentEncrypted===false) flags.push(wchip('⚠ encryption removed','warn'));
+  if(extR) flags.push(wchip('⚠ '+extR+' external recipient'+(extR===1?'':'s'),'warn'));
+  if(flags.length) lead=flagRow(flags.join(' '));
+
+  const ct=g('ContentType'), app=g('Application');
+  if(ct||app) kv('Content', (ct?wchip(ct):'')+(app?' '+esc(app):''));
+  if(oldLbl&&newLbl&&oldLbl!==newLbl) kv('Label', '<span class="tmut">'+esc(oldLbl)+'</span> → '+esc(newLbl));
+  else if(newLbl) kv('Label', '<span class="tmut">'+esc(newLbl)+'</span>');
+  const as=sled.ActionSource; if(as!==undefined) kv('Applied via', wchip(MIP_ACTIONSRC[as]||('source '+as)));
+  const obj=g('ObjectId'); if(obj&&ct==='File') kv('File', esc(shortObj(String(obj))));
+  if(cur.documentEncrypted!==undefined) kv('Encryption', wchip(cur.documentEncrypted?'Encrypted':'None',(prev.documentEncrypted&&!cur.documentEncrypted)?'warn':'')+(cur.owner?' <span class="tmut">'+esc(cur.owner)+'</span>':''));
+  if(rcpts.length){ const r=recipientList(rcpts,actorDom); kv(rcpts.length+' recipient'+(rcpts.length===1?'':'s'), r.html); }
+  const dev=g('DeviceName'), plat=g('Platform'); if(dev||plat) kv('Device', esc([dev,plat].filter(Boolean).join(' · ')));
+  return dsec('mip','Sensitivity label', rows, lead, '#d4a017');
+}
+
+/* Compliance DLP / auto-label policy match — RT 11/13 (Operations DlpRuleMatch, MipLabel). */
+function renderDLPSection(e){
+  const ad=e.raw; if(!ad||typeof ad!=='object') return '';
+  const g=function(){ return adGet.apply(null,[ad].concat([].slice.call(arguments))); };
+  let rows='',lead='';
+  const kv=(k,h)=>{ if(h!==undefined&&h!==null&&h!=='') rows+='<div class="k">'+esc(k)+'</div><div class="v">'+h+'</div>'; };
+  const op=(e.op||''), actorDom=emailDomain(e.user);
+  const pd=asArr(g('PolicyDetails'))||[];
+  const meta=g('ExchangeMetaData','SharePointMetaData')||{};
+  let policyName='',ruleName='',severity='',conditions=[],actions=[];
+  pd.forEach(p=>{ if(p.PolicyName&&!policyName)policyName=p.PolicyName; (asArr(p.Rules)||[]).forEach(r=>{
+    if(r.RuleName&&!ruleName)ruleName=r.RuleName; if(r.Severity&&!severity)severity=r.Severity;
+    (asArr(r.Actions)||[]).forEach(a=>actions.push(a));
+    const cm=r.ConditionsMatched||{}; (asArr(cm.OtherConditions)||[]).forEach(c=>{ if(c&&c.Name)conditions.push(c); });
+  }); });
+  const accessExternal=conditions.some(c=>/accessscope/i.test(c.Name)&&/external/i.test(String(c.Value)))||meta.IsViewableByExternalUsers===true;
+  const flags=[];
+  if(op==='DlpRuleMatch') flags.push(wchip('⚠ DLP policy match','warn'));
+  else if(op==='MipLabel') flags.push(wchip('auto-label applied',''));
+  if(accessExternal) flags.push(wchip('⚠ external recipients','warn'));
+  if(/high/i.test(severity)) flags.push(wchip('⚠ severity high','warn'));
+  if(flags.length) lead=flagRow(flags.join(' '));
+
+  if(policyName) kv('Policy', esc(policyName)+(ruleName?' <span class="tmut">'+esc(ruleName)+'</span>':''));
+  else if(ruleName) kv('Rule', esc(ruleName));
+  if(severity) kv('Severity', wchip(severity,/high/i.test(severity)?'warn':''));
+  if(conditions.length) kv('Conditions', conditions.slice(0,8).map(c=>{ const ext=/accessscope/i.test(c.Name)&&/external/i.test(String(c.Value)); return wchip(c.Name+': '+(c.Value!==undefined?c.Value:''), ext?'warn':''); }).join(' '));
+  if(actions.length) kv('Actions', actions.slice(0,6).map(a=>wchip(typeof a==='object'?(a.Name||JSON.stringify(a)):a)).join(' '));
+  const lblNames=asArr(meta.SensitivityLabelNames)||[]; if(lblNames.length) kv('Labels', lblNames.slice(0,6).map(n=>wchip(n)).join(' '));
+  if(meta.From) kv('From', esc(meta.From));
+  const rcpts=[].concat(meta.To||[],meta.CC||[],meta.BCC||[]);
+  if(rcpts.length){ const r=recipientList(rcpts,actorDom); kv((meta.RecipientCount||rcpts.length)+' recipient'+((meta.RecipientCount||rcpts.length)===1?'':'s'), r.html); }
+  if(meta.IsViewableByExternalUsers!==undefined) kv('External-viewable', wchip(meta.IsViewableByExternalUsers?'Yes':'No', meta.IsViewableByExternalUsers?'warn':''));
+  const att=asArr(meta.AttachmentDetails)||[];
+  if(att.length) kv(att.length+' attachment'+(att.length===1?'':'s'), '<div class="tparts">'+att.slice(0,30).map(a=>'<div class="tpart"><span class="tpn" title="'+esc(a.Name||'')+'">'+esc(a.Name||'(file)')+'</span>'+(a.Size?'<span class="trole">'+fmtBytes(a.Size)+'</span>':'')+'</div>').join('')+'</div>');
+  const inc=g('IncidentId'); if(inc) kv('Incident', '<span class="tmut">'+esc(inc)+'</span>');
+  return dsec('dlp', op==='MipLabel'?'Auto-labeling (DLP)':'DLP policy match', rows, lead, '#c75fb0');
 }
 
 /* ---------- file/object pivot ---------- */

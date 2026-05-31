@@ -35,6 +35,8 @@ Embedded commas, doubled quotes, and newlines inside the JSON blob are handled c
 
 **3. IP / session focus.** Switch to the **IP / session focus** tab and pick a source IP. The timeline scopes to everything that IP did *across all users* — the cross-account view that matters in BEC/ATO cases. IPs used by more than one account are sorted to the top and flagged (`⚠ N users`), and a configurable shared-session window marks rapid account switches from the same IP (`↔`) — the "one Tor exit, three mailboxes in ten minutes" pattern, surfaced at a glance.
 
+**4. Relationship graph.** The **Graph** tab is a Maltego-style, force-directed entity graph: a focal node (user, object, or IP) at the centre, surrounded by the entities it connects to — IPs, objects, operations, workloads — with **edge thickness = event count** and **edge colour = risk** (red where a high-risk op is involved). "This file had 47 events, but they're from 3 distinct users across 12 IPs" is one shape here instead of a scroll-through. Click a satellite to **re-centre** the graph on it (and the timeline pivots follow), click an edge to **scope the timeline** to those events, drag to rearrange, right-click to pin. Custom canvas, no dependencies.
+
 ## DFIR-relevant features
 
 - **Risk classification.** Operations auto-bucket into categories with a high/med/low/info weighting. BEC inbox rules, illicit OAuth consent grants, `MailItemsAccessed`, send-as, anonymous sharing links, mass file download, role grants — all bubble up as high. Toggle "high-risk only" in the toolbar for a fast triage pass.

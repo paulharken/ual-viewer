@@ -198,6 +198,22 @@
   .clearx:hover{color:var(--high)}
   .footer{flex:none;padding:4px 14px;background:var(--bg2);border-top:1px solid var(--line);
     font-size:10px;color:var(--txt3);display:flex;gap:16px;font-family:var(--mono)}
+
+  /* entity graph view */
+  .body.graph-on .timeline-wrap{display:none}
+  .graph-wrap{flex:1;min-width:0;position:relative;display:none;background:var(--bg)}
+  .body.graph-on .graph-wrap{display:block}
+  #gcanvas{display:block;width:100%;height:100%}
+  .ghud{position:absolute;pointer-events:none;background:rgba(10,14,20,.94);border:1px solid var(--line2);
+    color:var(--txt);font-size:11px;font-family:var(--mono);padding:3px 7px;border-radius:5px;white-space:nowrap;display:none;z-index:6;max-width:360px;overflow:hidden;text-overflow:ellipsis}
+  .ghint{position:absolute;left:12px;bottom:10px;font-size:10px;color:var(--txt3);font-family:var(--mono);pointer-events:none}
+  #pivot-graph .seg button{text-transform:none}
+  #gvalue,#gtopn{font-family:var(--sans);font-size:12px;color:var(--txt);background:var(--panel);
+    border:1px solid var(--line2);border-radius:6px;padding:6px 9px;outline:none}
+  #gvalue:focus,#gtopn:focus{border-color:var(--accent)}
+  .glegend{display:inline-flex;gap:12px;align-items:center;margin-left:auto;font-size:10px;color:var(--txt3);flex-wrap:wrap}
+  .glegend .gl{display:inline-flex;align-items:center;gap:4px}
+  .glegend .gl i{width:8px;height:8px;border-radius:50%;display:inline-block}
 </style>
 </head>
 <body>
@@ -264,6 +280,7 @@
     <button data-tab="user" class="on">User activity</button>
     <button data-tab="file">File / object focus</button>
     <button data-tab="ip">IP / session focus</button>
+    <button data-tab="graph">Graph</button>
   </div>
 
   <!-- user pivot -->
@@ -284,6 +301,23 @@
     </div>
     <div class="objlist" id="objlist"></div>
     <div class="summary" id="objsummary"></div>
+  </div>
+
+  <!-- graph pivot -->
+  <div class="pivot" id="pivot-graph">
+    <div class="row">
+      <span class="lbl">centre</span>
+      <div class="seg" id="gtypeseg">
+        <button data-gt="user" class="on">User</button>
+        <button data-gt="obj">Object</button>
+        <button data-gt="ip">IP</button>
+      </div>
+      <select id="gvalue" style="flex:1;min-width:200px;max-width:420px"></select>
+      <span class="lbl">satellites</span>
+      <select id="gtopn"><option>6</option><option selected>10</option><option>15</option><option>20</option></select>
+      <button class="btn sm" id="gfit" title="Re-seed and recentre the layout">fit</button>
+      <span class="glegend" id="glegend"></span>
+    </div>
   </div>
 
   <!-- ip pivot -->
@@ -314,6 +348,11 @@
         <span class="c-obj">object</span>
       </div>
       <div id="scroller"><div id="spacer"></div></div>
+    </div>
+    <div class="graph-wrap" id="graph-wrap">
+      <canvas id="gcanvas"></canvas>
+      <div class="ghud" id="ghud"></div>
+      <div class="ghint">click node = re-centre (user/object/IP) · click edge = scope timeline · right-click = pin · drag to move</div>
     </div>
     <div class="detail" id="detail">
       <div class="pgrip" data-panel="detail" title="Drag to resize · double-click to reset"></div>
@@ -587,7 +626,8 @@ let EVENTS=[];        // all normalised
 let FILTERED=[];      // current view
 let FILES=0;
 const F={ q:'', tz:'utc', from:null, to:null, highonly:false, sort:'asc',
-          risks:new Set(), wls:new Set(), tab:'user', user:'', obj:null, ipsel:'', ipwin:1440 };
+          risks:new Set(), wls:new Set(), tab:'user', user:'', obj:null, ipsel:'', ipwin:1440,
+          graphType:'', graphValue:'', graphTopN:10 };
 let IPSWITCH=null;     // Map(eventRef -> {prevUser, gap}) for the selected IP
 const SECCOLLAPSE={};  // collapsed state of detail sub-sections (per-workload + oauth)
 try{ ['oauth','teams','exchange','sharepoint','aad','yammer','endpoint','mip','dlp'].forEach(k=>{ if(localStorage.getItem('ual-viewer-sec-'+k)==='1') SECCOLLAPSE[k]=true; }); }catch(e){}
@@ -719,7 +759,8 @@ function applyFilters(){
   renderTimeline();
   renderDetail();
   document.getElementById('f-mode').textContent =
-     F.tab==='user' ? (F.user?('user: '+F.user):'all users')
+     F.tab==='graph'? ('graph: '+(F.graphType||'user')+(F.graphValue?' = '+shortObj(F.graphValue):''))
+   : F.tab==='user' ? (F.user?('user: '+F.user):'all users')
    : F.tab==='ip'   ? (F.ipsel?('ip: '+F.ipsel):'no IP selected')
    : (F.obj?('object: '+shortObj(F.obj)):'no object selected');
 }
@@ -1459,6 +1500,171 @@ function exportCSV(){
   a.click(); URL.revokeObjectURL(a.href);
 }
 
+/* ---------- entity graph view (issue #6) ---------- */
+const GTYPE_COLOR={user:'#4aa3ff', ip:'#f0a830', obj:'#3fb950', op:'#8a93a6', site:'#2aa9a0'};
+const GRISKORD={info:0, low:1, med:2, high:3};
+const GEDGE_COLOR={high:'#ff5d5d', med:'#f0a830', low:'#4aa3ff', info:'#5b6678'};
+function gtypeColor(gt,val){ return gt==='wl'?wlColor(val):(GTYPE_COLOR[gt]||'#8a93a6'); }
+const GRAPH={ nodes:[], edges:[], pos:new Map(), running:false, raf:0, hover:null, hoverEdge:null, drag:null, expand:{}, w:0, h:0 };
+let gcanvas=null, gctx=null, gWired=false;
+const GID_CENTER=' center';
+
+function graphCenter(){ // resolve {type,value}, defaulting from focal entity / top user
+  let t=F.graphType, v=F.graphValue;
+  if(!t){
+    if(F.obj){t='obj';v=F.obj;} else if(F.ipsel){t='ip';v=F.ipsel;} else if(F.user){t='user';v=F.user;}
+    else { const c={}; EVENTS.forEach(e=>{if(e.user)c[e.user]=(c[e.user]||0)+1;}); t='user'; v=Object.keys(c).sort((a,b)=>c[b]-c[a])[0]||''; }
+    F.graphType=t; F.graphValue=v;
+  }
+  return {type:t, value:v};
+}
+function buildGraph(){
+  const {type,value}=graphCenter();
+  GRAPH.nodes=[]; GRAPH.edges=[];
+  if(!value){ GRAPH.pos.clear(); return; }
+  const field=type==='user'?'user':type==='obj'?'obj':'ip';
+  const evs=EVENTS.filter(e=>e[field]===value);
+  const groups = type==='user' ? [['ip','ip'],['obj','obj'],['op','op'],['wl','wl']]
+               : type==='obj'  ? [['user','user'],['ip','ip'],['op','op'],['site','site']]
+               :                 [['user','user'],['obj','obj'],['op','op']];
+  const satMap=new Map();
+  evs.forEach(e=>{ groups.forEach(gp=>{ const gt=gp[0], f=gp[1], val=e[f]; if(!val||val===value)return;
+    const key=gt+' '+val; let s=satMap.get(key);
+    if(!s){ s={gtype:gt, val:String(val), count:0, maxRisk:'info'}; satMap.set(key,s); }
+    s.count++; if(GRISKORD[e.risk]>GRISKORD[s.maxRisk]) s.maxRisk=e.risk; }); });
+  const byGroup={}; satMap.forEach(s=>{ (byGroup[s.gtype]||(byGroup[s.gtype]=[])).push(s); });
+  GRAPH.nodes.push({id:GID_CENTER, gtype:type, val:value, kind:'center', label:(type==='obj'?shortObj(value):value)});
+  Object.keys(byGroup).forEach(gt=>{
+    const arr=byGroup[gt].sort((a,b)=>b.count-a.count);
+    const cap=(F.graphTopN||10)+(GRAPH.expand[gt]||0);
+    arr.slice(0,cap).forEach(s=>{ const id=gt+' '+s.val;
+      GRAPH.nodes.push({id, gtype:gt, val:s.val, kind:'sat', label:(gt==='obj'?shortObj(s.val):s.val), count:s.count, maxRisk:s.maxRisk});
+      GRAPH.edges.push({a:GID_CENTER, b:id, weight:s.count, risk:s.maxRisk}); });
+    if(arr.length>cap){ const id=' more '+gt;
+      GRAPH.nodes.push({id, gtype:gt, kind:'more', more:arr.length-cap, label:'+'+(arr.length-cap)+' more '+gt});
+      GRAPH.edges.push({a:GID_CENTER, b:id, weight:1, risk:'info', more:true}); }
+  });
+  seedGraphPositions();
+}
+function seedGraphPositions(){
+  const cx=GRAPH.w/2||300, cy=GRAPH.h/2||300, R=Math.min(cx,cy)*0.62;
+  const ids=new Set(GRAPH.nodes.map(n=>n.id));
+  GRAPH.pos.forEach((_,k)=>{ if(!ids.has(k)) GRAPH.pos.delete(k); });
+  const sats=GRAPH.nodes.filter(n=>n.kind!=='center');
+  GRAPH.nodes.forEach(n=>{ if(!GRAPH.pos.has(n.id)) GRAPH.pos.set(n.id,{x:0,y:0,vx:0,vy:0,pinned:false}); });
+  const c=GRAPH.pos.get(GID_CENTER); if(c){ c.x=cx; c.y=cy; c.vx=c.vy=0; c.pinned=true; }
+  let i=0; sats.forEach(n=>{ const p=GRAPH.pos.get(n.id);
+    if(!p.x&&!p.y){ const a=(i/Math.max(1,sats.length))*Math.PI*2; p.x=cx+Math.cos(a)*R; p.y=cy+Math.sin(a)*R; } i++; });
+}
+function graphTick(){
+  const nodes=GRAPH.nodes, pos=GRAPH.pos, cx=GRAPH.w/2, cy=GRAPH.h/2;
+  const REP=7000, SPRING=0.025, CENTERF=0.004, DAMP=0.86;
+  for(let i=0;i<nodes.length;i++){ const a=pos.get(nodes[i].id); if(!a)continue;
+    for(let j=i+1;j<nodes.length;j++){ const b=pos.get(nodes[j].id); if(!b)continue;
+      let dx=a.x-b.x, dy=a.y-b.y, d2=dx*dx+dy*dy; if(d2<1)d2=1; const d=Math.sqrt(d2), f=REP/d2;
+      const fx=f*dx/d, fy=f*dy/d; if(!a.pinned){a.vx+=fx;a.vy+=fy;} if(!b.pinned){b.vx-=fx;b.vy-=fy;} } }
+  GRAPH.edges.forEach(e=>{ const a=pos.get(e.a), b=pos.get(e.b); if(!a||!b)return;
+    let dx=b.x-a.x, dy=b.y-a.y, d=Math.sqrt(dx*dx+dy*dy)||0.01;
+    const rest=90+140/Math.sqrt(e.weight||1), f=SPRING*(d-rest), fx=f*dx/d, fy=f*dy/d;
+    if(!a.pinned){a.vx+=fx;a.vy+=fy;} if(!b.pinned){b.vx-=fx;b.vy-=fy;} });
+  let ke=0;
+  nodes.forEach(n=>{ const p=pos.get(n.id); if(!p||p.pinned)return;
+    p.vx+=(cx-p.x)*CENTERF; p.vy+=(cy-p.y)*CENTERF; p.vx*=DAMP; p.vy*=DAMP; p.x+=p.vx; p.y+=p.vy; ke+=p.vx*p.vx+p.vy*p.vy; });
+  return ke;
+}
+function startGraphSim(){ if(GRAPH.running)return; GRAPH.running=true; loopGraph(); }
+function stopGraphSim(){ GRAPH.running=false; if(GRAPH.raf)cancelAnimationFrame(GRAPH.raf); GRAPH.raf=0; }
+function loopGraph(){ if(!GRAPH.running)return; let ke=0; for(let s=0;s<2;s++) ke=graphTick(); drawGraph();
+  if(ke<0.08 && !GRAPH.drag){ GRAPH.running=false; GRAPH.raf=0; return; } GRAPH.raf=requestAnimationFrame(loopGraph); }
+function truncLabel(s){ s=String(s); return s.length>34?s.slice(0,33)+'…':s; }
+function drawGraph(){
+  if(!gctx)return; const ctx=gctx; ctx.clearRect(0,0,GRAPH.w,GRAPH.h);
+  GRAPH.edges.forEach(e=>{ const a=GRAPH.pos.get(e.a), b=GRAPH.pos.get(e.b); if(!a||!b)return;
+    const hot=GRAPH.hoverEdge===e;
+    ctx.lineWidth=e.more?1:Math.min(6,1+Math.log2(e.weight+1));
+    ctx.strokeStyle=e.more?'rgba(255,255,255,.14)':(hot?'#ffffff':GEDGE_COLOR[e.risk]||'#5b6678');
+    ctx.beginPath(); ctx.moveTo(a.x,a.y); ctx.lineTo(b.x,b.y); ctx.stroke(); });
+  GRAPH.nodes.forEach(n=>{ const p=GRAPH.pos.get(n.id); if(!p)return;
+    const isC=n.kind==='center', isMore=n.kind==='more';
+    const r=isC?15:isMore?7:Math.min(13,6+Math.log2((n.count||1)+1));
+    ctx.beginPath(); ctx.arc(p.x,p.y,r,0,6.2832); ctx.fillStyle=isMore?'#2a3547':gtypeColor(n.gtype,n.val); ctx.fill();
+    if(isC){ ctx.lineWidth=2.5; ctx.strokeStyle='#fff'; ctx.stroke(); }
+    else if(GRAPH.hover===n){ ctx.lineWidth=2; ctx.strokeStyle='#fff'; ctx.stroke(); }
+    else if(p.pinned){ ctx.lineWidth=1.5; ctx.strokeStyle='rgba(255,255,255,.6)'; ctx.stroke(); }
+    ctx.font=isC?'600 12px '+'-apple-system,system-ui,sans-serif':'11px -apple-system,system-ui,sans-serif';
+    ctx.fillStyle=isC?'#fff':'#cfd8e6'; ctx.textBaseline='middle';
+    ctx.fillText(truncLabel(n.label||''), p.x+r+4, p.y); });
+}
+function sizeGraphCanvas(){ const wrap=document.getElementById('graph-wrap'); if(!wrap||!gcanvas)return;
+  const rc=wrap.getBoundingClientRect(), dpr=window.devicePixelRatio||1;
+  GRAPH.w=rc.width; GRAPH.h=rc.height;
+  gcanvas.width=Math.round(rc.width*dpr); gcanvas.height=Math.round(rc.height*dpr);
+  gcanvas.style.width=rc.width+'px'; gcanvas.style.height=rc.height+'px';
+  gctx.setTransform(dpr,0,0,dpr,0,0); }
+function gMouse(ev){ const rc=gcanvas.getBoundingClientRect(); return {x:ev.clientX-rc.left, y:ev.clientY-rc.top}; }
+function graphHitNode(x,y){ let best=null,bd=1e9;
+  GRAPH.nodes.forEach(n=>{ const p=GRAPH.pos.get(n.id); if(!p)return; const r=(n.kind==='center'?15:n.kind==='more'?8:11)+5;
+    const dx=x-p.x,dy=y-p.y,d=dx*dx+dy*dy; if(d<r*r&&d<bd){bd=d;best=n;} }); return best; }
+function distSeg(px,py,x1,y1,x2,y2){ const dx=x2-x1,dy=y2-y1,l2=dx*dx+dy*dy||1; let t=((px-x1)*dx+(py-y1)*dy)/l2; t=Math.max(0,Math.min(1,t)); return Math.hypot(px-(x1+t*dx),py-(y1+t*dy)); }
+function graphHitEdge(x,y){ let best=null,bd=7;
+  GRAPH.edges.forEach(e=>{ const a=GRAPH.pos.get(e.a),b=GRAPH.pos.get(e.b); if(!a||!b)return; const d=distSeg(x,y,a.x,a.y,b.x,b.y); if(d<bd){bd=d;best=e;} }); return best; }
+function updateGraphHUD(n,e,ev){ const hud=document.getElementById('ghud'); if(!hud)return; let t='';
+  if(n&&n.kind==='sat') t=n.gtype+': '+n.label+' · '+n.count+' event'+(n.count===1?'':'s')+(n.maxRisk&&n.maxRisk!=='info'?' · '+n.maxRisk+'-risk':'');
+  else if(n&&n.kind==='center') t='centre · '+n.label;
+  else if(n&&n.kind==='more') t='click to expand '+n.more+' more';
+  else if(e){ const s=GRAPH.nodes.find(x=>x.id===e.b); t=(s?s.label:'')+' · '+e.weight+' event'+(e.weight===1?'':'s')+' · click to scope timeline'; }
+  if(!t){ hud.style.display='none'; return; }
+  hud.textContent=t; hud.style.display='block';
+  const rc=gcanvas.getBoundingClientRect(); let lx=ev.clientX-rc.left+13, ty=ev.clientY-rc.top+13;
+  hud.style.left=Math.min(lx,GRAPH.w-hud.offsetWidth-6)+'px'; hud.style.top=Math.min(ty,GRAPH.h-28)+'px'; }
+function onGraphMove(ev){ const m=gMouse(ev);
+  if(GRAPH.drag){ const p=GRAPH.pos.get(GRAPH.drag.id); if(p){p.x=m.x;p.y=m.y;p.vx=p.vy=0;} GRAPH.drag.moved=GRAPH.drag.moved||Math.hypot(m.x-GRAPH.drag.dx,m.y-GRAPH.drag.dy)>4; startGraphSim(); return; }
+  const n=graphHitNode(m.x,m.y), e=n?null:graphHitEdge(m.x,m.y);
+  if(n!==GRAPH.hover||e!==GRAPH.hoverEdge){ GRAPH.hover=n; GRAPH.hoverEdge=e; if(!GRAPH.running)drawGraph(); }
+  updateGraphHUD(n,e,ev); gcanvas.style.cursor=(n||e)?'pointer':'default'; }
+function onGraphDown(ev){ const m=gMouse(ev); const n=graphHitNode(m.x,m.y);
+  if(n){ GRAPH.drag={id:n.id, node:n, moved:false, dx:m.x, dy:m.y}; if(n.kind!=='center'){ const p=GRAPH.pos.get(n.id); if(p)p.pinned=true; } } }
+function onGraphUp(ev){ if(GRAPH.drag){ const d=GRAPH.drag; GRAPH.drag=null;
+    if(!d.moved){ onGraphClickNode(d.node); } return; }
+  const m=gMouse(ev); const e=graphHitEdge(m.x,m.y); if(e) onGraphClickEdge(e); }
+function onGraphCtx(ev){ ev.preventDefault(); const m=gMouse(ev); const n=graphHitNode(m.x,m.y);
+  if(n&&n.kind!=='center'){ const p=GRAPH.pos.get(n.id); if(p){ p.pinned=!p.pinned; drawGraph(); } } }
+function onGraphClickNode(n){
+  if(n.kind==='more'){ GRAPH.expand[n.gtype]=(GRAPH.expand[n.gtype]||0)+(F.graphTopN||10); buildGraph(); startGraphSim(); return; }
+  if(n.kind==='center') return;
+  if(n.gtype==='user'||n.gtype==='obj'||n.gtype==='ip') recenterGraph(n.gtype,n.val);
+  else scopeTimelineToSat(n); }
+function onGraphClickEdge(e){ const s=GRAPH.nodes.find(x=>x.id===e.b); if(s) scopeTimelineToSat(s); }
+function recenterGraph(type,val){ F.graphType=type; F.graphValue=val; GRAPH.expand={};
+  if(type==='user')F.user=val; else if(type==='obj')F.obj=val; else if(type==='ip')F.ipsel=val;
+  syncGraphControls(); buildGraph(); startGraphSim(); }
+function scopeTimelineToSat(n){ const c=graphCenter();
+  if(c.type==='user'){ setTab('user'); F.user=c.value; document.getElementById('userselect').value=c.value; }
+  else if(c.type==='obj'){ setTab('file'); selectObject(c.value); }
+  else if(c.type==='ip'){ setTab('ip'); selectIp(c.value); document.getElementById('ipselect').value=c.value; }
+  if(n.kind==='sat'){ document.getElementById('search').value=n.val; F.q=n.val; }
+  applyFilters(); }
+function populateGraphValues(type){ const sel=document.getElementById('gvalue'); if(!sel)return; let items=[];
+  if(type==='obj'){ if(!OBJINDEX)buildObjIndex(); items=OBJINDEX.slice(0,500).map(o=>[o.obj,o.count]); }
+  else { const f=type==='ip'?'ip':'user', c={}; EVENTS.forEach(e=>{const v=e[f]; if(v)c[v]=(c[v]||0)+1;});
+    items=Object.keys(c).sort((a,b)=>c[b]-c[a]).map(v=>[v,c[v]]); }
+  sel.innerHTML=items.map(it=>'<option value="'+esc(it[0])+'">'+esc(type==='obj'?shortObj(it[0]):it[0])+' ('+it[1]+')</option>').join(''); }
+function renderGraphLegend(){ const el=document.getElementById('glegend'); if(!el)return;
+  el.innerHTML=[['user','user'],['ip','IP'],['obj','object'],['op','operation']].map(it=>'<span class="gl"><i style="background:'+GTYPE_COLOR[it[0]]+'"></i>'+it[1]+'</span>').join('')
+    +'<span class="gl"><i style="background:#ff5d5d;width:14px;height:3px;border-radius:1px"></i>high-risk edge</span>'; }
+function syncGraphControls(){ const c=graphCenter();
+  document.querySelectorAll('#gtypeseg button').forEach(b=>b.classList.toggle('on',b.dataset.gt===c.type));
+  populateGraphValues(c.type); const sel=document.getElementById('gvalue'); if(sel)sel.value=c.value; renderGraphLegend(); }
+function enterGraph(){
+  if(!gcanvas){ gcanvas=document.getElementById('gcanvas'); gctx=gcanvas.getContext('2d'); }
+  if(!gWired){ gWired=true;
+    gcanvas.addEventListener('mousemove',onGraphMove); gcanvas.addEventListener('mousedown',onGraphDown);
+    window.addEventListener('mouseup',onGraphUp); gcanvas.addEventListener('contextmenu',onGraphCtx);
+    gcanvas.addEventListener('mouseleave',()=>{ GRAPH.hover=null; GRAPH.hoverEdge=null; const h=document.getElementById('ghud'); if(h)h.style.display='none'; if(!GRAPH.running)drawGraph(); });
+    if(window.ResizeObserver) new ResizeObserver(()=>{ if(F.tab==='graph'){ sizeGraphCanvas(); seedGraphPositions(); startGraphSim(); } }).observe(document.getElementById('graph-wrap')); }
+  graphCenter(); syncGraphControls(); sizeGraphCanvas(); buildGraph(); startGraphSim();
+}
+
 /* ---------- tabs ---------- */
 function setTab(t){
   F.tab=t;
@@ -1466,7 +1672,10 @@ function setTab(t){
   document.getElementById('pivot-user').classList.toggle('on',t==='user');
   document.getElementById('pivot-file').classList.toggle('on',t==='file');
   document.getElementById('pivot-ip').classList.toggle('on',t==='ip');
+  document.getElementById('pivot-graph').classList.toggle('on',t==='graph');
+  document.querySelector('.body').classList.toggle('graph-on',t==='graph');
   if(t==='file' && !OBJINDEX){ buildObjIndex(); renderObjList(); }
+  if(t==='graph') enterGraph(); else stopGraphSim();
 }
 
 /* ---------- wire up ---------- */
@@ -1504,6 +1713,21 @@ document.getElementById('ipwindow').onchange=e=>{ F.ipwin=parseInt(e.target.valu
 document.getElementById('objsearch').oninput=()=>renderObjList();
 document.getElementById('objclear').onclick=()=>{F.obj=null;document.getElementById('objclear').style.display='none';
   renderObjList();renderObjSummary();applyFilters();};
+// graph controls
+document.getElementById('gtypeseg').onclick=e=>{ if(e.target.dataset.gt){
+  F.graphType=e.target.dataset.gt; F.graphValue=''; GRAPH.expand={};
+  document.querySelectorAll('#gtypeseg button').forEach(b=>b.classList.toggle('on',b===e.target));
+  populateGraphValues(F.graphType);
+  const sel=document.getElementById('gvalue'); F.graphValue=sel.value||''; renderGraphLegend();
+  buildGraph(); startGraphSim();
+}};
+document.getElementById('gvalue').onchange=e=>{ F.graphValue=e.target.value; GRAPH.expand={};
+  if(F.graphType==='user')F.user=e.target.value; else if(F.graphType==='obj')F.obj=e.target.value; else if(F.graphType==='ip')F.ipsel=e.target.value;
+  buildGraph(); startGraphSim(); };
+document.getElementById('gtopn').onchange=e=>{ F.graphTopN=parseInt(e.target.value,10)||10; GRAPH.expand={};
+  try{ localStorage.setItem('ual-viewer-graph-topn', F.graphTopN); }catch(_){} buildGraph(); startGraphSim(); };
+try{ const gt=parseInt(localStorage.getItem('ual-viewer-graph-topn'),10); if(gt){ F.graphTopN=gt; document.getElementById('gtopn').value=String(gt); } }catch(_){}
+document.getElementById('gfit').onclick=()=>{ GRAPH.pos.clear(); sizeGraphCanvas(); seedGraphPositions(); startGraphSim(); };
 document.getElementById('btn-add').onclick=()=>fileInput.click();
 document.getElementById('btn-export').onclick=exportCSV;
 /* ---------- collapsible side panels (detail + raw, independent) ---------- */
@@ -1584,6 +1808,8 @@ try{ if(localStorage.getItem('ual-viewer-raw-collapsed')==='1') setPanel('raw',t
 })();
 
 document.getElementById('btn-reset').onclick=()=>{
+  stopGraphSim(); GRAPH.nodes=[];GRAPH.edges=[];GRAPH.pos.clear();GRAPH.expand={};GRAPH.hover=null;GRAPH.hoverEdge=null;
+  F.graphType='';F.graphValue='';
   EVENTS=[];FILTERED=[];FILES=0;OBJINDEX=null;F.user='';F.obj=null;F.q='';F.risks.clear();F.wls.clear();
   F.from=F.to=null;F.highonly=false;F.ipsel='';F.ipwin=1440;IPSWITCH=null;IPUSERS=null;
   document.getElementById('app').style.display='none';

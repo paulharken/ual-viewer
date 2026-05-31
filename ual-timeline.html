@@ -203,7 +203,8 @@
   .body.timeline-on .timeline-wrap{display:none}
   .ts-wrap{flex:1;min-width:0;position:relative;display:none;background:var(--bg);flex-direction:column}
   .body.timeline-on .ts-wrap{display:flex}
-  #tsover{display:block;width:100%;height:46px;flex:none;border-bottom:1px solid var(--line);cursor:pointer}
+  #tsover{display:block;width:100%;height:46px;flex:none;border-bottom:1px solid var(--line);cursor:grab}
+  #tsover.grabbing{cursor:grabbing}
   #tscanvas{display:block;width:100%;flex:1;min-height:0;cursor:grab}
   #tscanvas.scrubbing{cursor:grabbing}
   .ts-hint{position:absolute;left:12px;bottom:8px;font-size:10px;color:var(--txt3);
@@ -353,7 +354,7 @@
     <div class="ts-wrap" id="ts-wrap">
       <canvas id="tsover"></canvas>
       <canvas id="tscanvas"></canvas>
-      <div class="ts-hint">drag the axis to scrub · drag the overview box to move · click a mark to inspect</div>
+      <div class="ts-hint">drag the axis to scrub · drag the overview to pan, click it to jump · click a mark to inspect</div>
     </div>
     <div class="detail" id="detail">
       <div class="pgrip" data-panel="detail" title="Drag to resize · double-click to reset"></div>
@@ -1625,14 +1626,18 @@ function onTsUp(ev){ if(!(TS.drag&&TS.drag.kind==='fine'))return; const d=TS.dra
   if(!d.moved){ const m=tsLocal(TS.canvas,ev), hit=tsHitMark(m.x,m.y);
     if(hit){ selectedIdx=hit.fidx; renderTimeSlice(); renderDetail(); } }
 }
-function onOverDown(ev){ if(!FILTERED.length)return; const m=tsLocal(TS.over,ev), half=tsHalf();
-  const x0=tsOverX(F.tsCenter-half), x1=tsOverX(F.tsCenter+half);
-  if(m.x>=x0&&m.x<=x1){ TS.drag={kind:'over', sx:m.x, sCenter:F.tsCenter}; }
-  else { F.tsCenter=clampCenter(tsOverXinv(m.x)); renderTimeSlice(); }
+function onOverDown(ev){ if(!FILTERED.length)return; const m=tsLocal(TS.over,ev);
+  // grab anywhere on the overview to pan; a click without movement seeks (handled on mouseup)
+  TS.drag={kind:'over', sx:m.x, sCenter:F.tsCenter, moved:false}; TS.over.classList.add('grabbing');
 }
 function onOverMove(ev){ if(!(TS.drag&&TS.drag.kind==='over'))return; const m=tsLocal(TS.over,ev);
+  if(Math.abs(m.x-TS.drag.sx)>3) TS.drag.moved=true;
   const span=(TS.maxTs-TS.minTs)||1, dms=((m.x-TS.drag.sx)/TS.ow)*span;
   F.tsCenter=clampCenter(TS.drag.sCenter+dms); renderTimeSlice();
+}
+function onOverUp(ev){ if(!(TS.drag&&TS.drag.kind==='over'))return; const d=TS.drag; TS.drag=null;
+  TS.over.classList.remove('grabbing');
+  if(!d.moved){ const m=tsLocal(TS.over,ev); F.tsCenter=clampCenter(tsOverXinv(m.x)); renderTimeSlice(); }
 }
 function tsRenderLegend(){ const el=document.getElementById('ts-legend'); if(!el)return;
   el.innerHTML=[['high','#ff5d5d'],['med','#f0a830'],['low','#4aa3ff'],['info','#8a93a6']]
@@ -1646,7 +1651,9 @@ function enterTimeSlice(){
     window.addEventListener('mousemove',e=>{ if(F.tab!=='timeline')return;
       if(TS.drag&&TS.drag.kind==='over') onOverMove(e); else onTsMove(e); });
     window.addEventListener('mouseup',e=>{ if(F.tab!=='timeline')return;
-      if(TS.drag&&TS.drag.kind==='fine') onTsUp(e); else TS.drag=null; });
+      if(TS.drag&&TS.drag.kind==='fine') onTsUp(e);
+      else if(TS.drag&&TS.drag.kind==='over') onOverUp(e);
+      else TS.drag=null; });
     if(window.ResizeObserver) new ResizeObserver(()=>{ if(F.tab==='timeline'){ tsSize(); renderTimeSlice(); } }).observe(document.getElementById('ts-wrap'));
     tsRenderLegend();
   }

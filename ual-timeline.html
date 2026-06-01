@@ -86,6 +86,17 @@
   .chip .dot{width:8px;height:8px;border-radius:50%}
   #opchips{max-height:80px;overflow-y:auto}
 
+  /* navigation history menu */
+  .histwrap{position:relative;display:inline-block}
+  .histmenu{position:absolute;top:calc(100% + 4px);right:0;z-index:30;min-width:200px;max-width:360px;
+    max-height:320px;overflow:auto;background:var(--panel);border:1px solid var(--line2);border-radius:8px;
+    padding:4px;display:none;box-shadow:0 8px 24px rgba(0,0,0,.4)}
+  .histmenu.on{display:block}
+  .histitem{font-size:12px;color:var(--txt2);padding:6px 9px;border-radius:6px;cursor:pointer;white-space:nowrap;
+    overflow:hidden;text-overflow:ellipsis}
+  .histitem:hover{background:var(--panel2);color:var(--txt)}
+  .histitem.cur{color:var(--accent);font-weight:500}
+
   /* tabs */
   .tabs{display:flex;gap:0;background:var(--bg2);border-bottom:1px solid var(--line);flex:none}
   .tabs button{background:none;border:none;border-bottom:2px solid transparent;color:var(--txt2);
@@ -234,6 +245,8 @@
     <div class="stat"><b id="st-ips">0</b><span>IPs</span></div>
     <div class="stat"><b id="st-range">—</b><span>span</span></div>
     <button class="btn sm" id="btn-back" title="Go back to the previous view (Alt+←)" disabled>← back</button>
+    <button class="btn sm" id="btn-fwd" title="Go forward (Alt+→)" disabled>forward →</button>
+    <div class="histwrap"><button class="btn sm" id="btn-hist" title="Jump to a location in your history" disabled>history ▾</button><div class="histmenu" id="histmenu"></div></div>
     <button class="btn sm" id="btn-detail" title="Toggle the decoded detail panel">hide detail</button>
     <button class="btn sm" id="btn-raw" title="Toggle the raw AuditData panel">hide raw</button>
     <button class="btn sm" id="btn-add">+ add CSV</button>
@@ -667,7 +680,7 @@ function afterLoad(){
   document.getElementById('loader').style.display='none';
   document.getElementById('app').style.display='flex';
   document.getElementById('statbar').style.display='flex';
-  NAV=[]; updateBackBtn();
+  NAV=[]; FWD=[]; updateNavBtns();
   applyFilters();
 }
 
@@ -897,6 +910,7 @@ function selectRow(idx){
 document.addEventListener('keydown',e=>{
   if(document.getElementById('app').style.display==='none') return;        // not loaded
   if(e.altKey && e.key==='ArrowLeft'){ navBack(); e.preventDefault(); return; }   // back
+  if(e.altKey && e.key==='ArrowRight'){ navForward(); e.preventDefault(); return; } // forward
   if(e.ctrlKey||e.metaKey||e.altKey) return;                               // leave shortcuts alone
   const t=e.target, tag=t&&t.tagName;
   if(tag==='INPUT'||tag==='SELECT'||tag==='TEXTAREA') return;              // typing in a field
@@ -1691,19 +1705,38 @@ function setTab(t){
   if(t==='timeline') enterTimeSlice();
 }
 
-/* ---------- navigation history (back button) ---------- */
-let NAV=[];               // stack of prior view snapshots
+/* ---------- navigation history (back / forward / jump) ---------- */
+let NAV=[];               // back stack of prior view snapshots
+let FWD=[];               // forward stack (locations undone via back)
 let navApplying=false;    // guard so restoring doesn't record itself
+function evKey(e){ return e? (e.id || (e.tsRaw+'|'+e.op+'|'+e.user)) : null; }
 function snapState(){
   return { tab:F.tab, user:F.user, obj:F.obj, ipsel:F.ipsel, q:F.q, highonly:F.highonly,
     sort:F.sort, ipwin:F.ipwin, from:F.from, to:F.to, tsCenter:F.tsCenter, tsWin:F.tsWin,
-    risks:[...F.risks], wls:[...F.wls], ops:[...F.ops], sel:selectedIdx };
+    risks:[...F.risks], wls:[...F.wls], ops:[...F.ops],
+    selKey:(selectedIdx>=0&&selectedIdx<FILTERED.length)?evKey(FILTERED[selectedIdx]):null };
 }
-function updateBackBtn(){ const b=document.getElementById('btn-back'); if(b) b.disabled=NAV.length===0; }
+function navLabel(s){
+  let l = s.tab==='user' ? (s.user?('user: '+s.user):'all users')
+        : s.tab==='file' ? (s.obj?('object: '+shortObj(s.obj)):'file focus')
+        : s.tab==='ip'   ? (s.ipsel?('ip: '+s.ipsel):'ip focus')
+        : s.tab==='timeline' ? 'time slice' : s.tab;
+  if(s.q) l+=' · "'+s.q+'"';
+  return l;
+}
+function updateNavBtns(){
+  const b=document.getElementById('btn-back'), f=document.getElementById('btn-fwd'), h=document.getElementById('btn-hist');
+  if(b) b.disabled=NAV.length===0;
+  if(f) f.disabled=FWD.length===0;
+  if(h) h.disabled=NAV.length===0 && FWD.length===0;
+  const menu=document.getElementById('histmenu');
+  if(menu && menu.classList.contains('on')) renderHistMenu();
+}
 function recordNav(){ if(navApplying) return; const s=snapState();
   const top=NAV[NAV.length-1];
   if(top && JSON.stringify(top)===JSON.stringify(s)) return;   // skip no-op pivots
-  NAV.push(s); if(NAV.length>200) NAV.shift(); updateBackBtn();
+  NAV.push(s); if(NAV.length>200) NAV.shift(); FWD=[];          // new branch clears forward
+  updateNavBtns();
 }
 function syncChipStates(){
   document.querySelectorAll('#riskchips .chip').forEach(c=>{ const on=F.risks.has(c.dataset.risk);
@@ -1733,10 +1766,32 @@ function restoreState(s){
   if(F.tab==='ip') renderIpSummary();
   if(F.tab==='file'){ if(OBJINDEX) renderObjList(); renderObjSummary(); }
   applyFilters();
-  if(s.sel>=0 && s.sel<FILTERED.length){ selectedIdx=s.sel; paintWindow(); renderTimeSlice(); renderDetail(); }
-  navApplying=false; updateBackBtn();
+  if(s.selKey){ const i=FILTERED.findIndex(e=>evKey(e)===s.selKey);    // re-locate by stable key
+    if(i>=0){ selectedIdx=i; paintWindow(); renderTimeSlice(); renderDetail(); } }
+  navApplying=false; updateNavBtns();
 }
-function navBack(){ if(NAV.length) restoreState(NAV.pop()); }
+function navBack(){ if(!NAV.length) return; FWD.push(snapState()); restoreState(NAV.pop()); }
+function navForward(){ if(!FWD.length) return; NAV.push(snapState()); restoreState(FWD.pop()); }
+// full ordered trail: oldest back-entries … current … forward-entries (current marked)
+function navGoTo(absPos){
+  const cur=NAV.length; if(absPos===cur) return;
+  if(absPos<cur){ const steps=cur-absPos; FWD.push(snapState());
+    for(let i=0;i<steps-1;i++) FWD.push(NAV.pop()); restoreState(NAV.pop()); }
+  else { const steps=absPos-cur; NAV.push(snapState());
+    for(let i=0;i<steps-1;i++) NAV.push(FWD.pop()); restoreState(FWD.pop()); }
+}
+function renderHistMenu(){
+  const menu=document.getElementById('histmenu'); if(!menu) return;
+  const trail=[...NAV, snapState(), ...[...FWD].reverse()];   // index === position in trail
+  const cur=NAV.length;
+  menu.innerHTML = trail.map((s,p)=>'<div class="histitem'+(p===cur?' cur':'')+'" data-pos="'+p+'">'+
+    (p===cur?'● ':'')+esc(navLabel(s))+'</div>').reverse().join('');   // newest at top
+  menu.querySelectorAll('.histitem').forEach(it=>it.onclick=()=>{ closeHistMenu(); navGoTo(parseInt(it.dataset.pos,10)); });
+}
+function openHistMenu(){ const m=document.getElementById('histmenu'); if(!m)return; renderHistMenu(); m.classList.add('on'); }
+function closeHistMenu(){ const m=document.getElementById('histmenu'); if(m) m.classList.remove('on'); }
+function toggleHistMenu(){ const m=document.getElementById('histmenu'); if(!m)return;
+  m.classList.contains('on')?closeHistMenu():openHistMenu(); }
 
 /* ---------- wire up ---------- */
 const drop=document.getElementById('drop'), fileInput=document.getElementById('file');
@@ -1800,6 +1855,9 @@ function setPanel(which, collapsed){
   if(!collapsed){ if(which==='detail') renderDetail(); else renderRaw(); }
 }
 document.getElementById('btn-back').onclick=navBack;
+document.getElementById('btn-fwd').onclick=navForward;
+document.getElementById('btn-hist').onclick=e=>{ e.stopPropagation(); toggleHistMenu(); };
+document.addEventListener('click',e=>{ if(!e.target.closest('.histwrap')) closeHistMenu(); });
 document.getElementById('btn-detail').onclick=()=>setPanel('detail', !document.querySelector('.body').classList.contains('detail-collapsed'));
 document.getElementById('btn-raw').onclick=()=>setPanel('raw', !document.querySelector('.body').classList.contains('raw-collapsed'));
 try{ if(localStorage.getItem('ual-viewer-detail-collapsed')==='1') setPanel('detail',true); }catch(e){}
@@ -1869,7 +1927,7 @@ try{ if(localStorage.getItem('ual-viewer-raw-collapsed')==='1') setPanel('raw',t
 
 document.getElementById('btn-reset').onclick=()=>{
   F.tsCenter=null; F.tsWin=10; TS.drag=null; syncTsWinControl();
-  NAV=[];updateBackBtn();
+  NAV=[];FWD=[];updateNavBtns();closeHistMenu();
   EVENTS=[];FILTERED=[];FILES=0;OBJINDEX=null;F.user='';F.obj=null;F.q='';F.risks.clear();F.wls.clear();F.ops.clear();
   F.from=F.to=null;F.highonly=false;F.ipsel='';F.ipwin=1440;IPSWITCH=null;IPUSERS=null;
   document.getElementById('app').style.display='none';
